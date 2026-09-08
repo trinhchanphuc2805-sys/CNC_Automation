@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+
+    <title>CNC Motor Control</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #f2f2f2;
+
+            display: flex;
+            justify-content: center;
+            align-items: center;
+
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px 0;
+        }
+
+        .container {
+            background: white;
+
+            width: 550px;
+            max-width: 95%;
+
+            padding: 30px;
+
+            border-radius: 15px;
+
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.2);
+
+            text-align: center;
+        }
+
+        h1 {
+            margin-top: 0;
+        }
+
+        .connect {
+            width: 280px;
+            height: 55px;
+
+            font-size: 18px;
+
+            border: none;
+            border-radius: 10px;
+
+            cursor: pointer;
+
+            background: #333;
+            color: white;
+        }
+
+        #status {
+            margin: 15px;
+
+            font-weight: bold;
+        }
+
+        .settings {
+            margin: 25px 0;
+        }
+
+        input {
+            width: 120px;
+
+            padding: 10px;
+
+            font-size: 20px;
+
+            text-align: center;
+
+            border-radius: 8px;
+
+            border: 1px solid #ccc;
+        }
+
+        .axis {
+            border: 1px solid #ddd;
+
+            border-radius: 12px;
+
+            padding: 20px;
+
+            margin-top: 20px;
+
+            background: #fafafa;
+        }
+
+        .axis h2 {
+            margin-top: 0;
+        }
+
+        .axis-buttons {
+            display: flex;
+
+            justify-content: center;
+
+            gap: 15px;
+        }
+
+        button.move {
+            width: 200px;
+
+            height: 65px;
+
+            font-size: 20px;
+
+            border: none;
+
+            border-radius: 10px;
+
+            cursor: pointer;
+        }
+
+        .backward {
+            background: #f44336;
+            color: white;
+        }
+
+        .forward {
+            background: #4CAF50;
+            color: white;
+        }
+
+        button:hover {
+            opacity: 0.85;
+        }
+
+        button:active {
+            transform: scale(0.97);
+        }
+
+
+        /* ===================== */
+        /* CẤU HÌNH BÀN PHÍM */
+        /* ===================== */
+
+        .keypad-config {
+            display: grid;
+
+            grid-template-columns: 1fr 1fr;
+
+            gap: 15px;
+
+            margin: 15px 0 25px;
+        }
+
+        .keypad-config div {
+            text-align: left;
+        }
+
+        .keypad-config label {
+            display: block;
+
+            font-size: 14px;
+
+            font-weight: bold;
+
+            margin-bottom: 6px;
+
+            color: #555;
+        }
+
+        .keypad-config input {
+            width: 100%;
+        }
+
+        .pos-display {
+            margin-top: 10px;
+
+            font-size: 14px;
+
+            color: #666;
+        }
+
+
+        /* ===================== */
+        /* BÀN PHÍM SỐ */
+        /* ===================== */
+
+        .keypad-grid {
+            display: grid;
+
+            grid-template-columns: repeat(3, 1fr);
+
+            gap: 12px;
+
+            max-width: 320px;
+
+            margin: 0 auto;
+        }
+
+        .key {
+            height: 65px;
+
+            font-size: 22px;
+
+            font-weight: bold;
+
+            border: none;
+
+            border-radius: 10px;
+
+            cursor: pointer;
+
+            background: #2196F3;
+
+            color: white;
+        }
+
+        .key:hover {
+            opacity: 0.85;
+        }
+
+        .key:active {
+            transform: scale(0.95);
+        }
+
+        .key.hash {
+            background: #999;
+        }
+
+        .key.home {
+            background: #ff9800;
+        }
+    </style>
+
+</head>
+
+
+<body>
+
+    <div class="container">
+
+        <h1>🎛 CNC CONTROL</h1>
+
+
+        <!-- KẾT NỐI -->
+
+        <button class="connect" onclick="connectSerial()">
+            🔌 KẾT NỐI ARDUINO
+        </button>
+
+
+        <div id="status">
+
+            🔴 Chưa kết nối
+
+        </div>
+
+
+        <!-- STEP -->
+
+        <div class="settings">
+
+            <h3>Số Step</h3>
+
+            <input type="number" id="steps" value="100" min="1">
+
+        </div>
+
+
+        <!-- ===================== -->
+        <!-- TRỤC X -->
+        <!-- ===================== -->
+
+        <div class="axis">
+
+            <h2>TRỤC X</h2>
+
+            <div class="axis-buttons">
+
+                <button class="move backward" onclick="moveXBackward()">
+                    ← X LÙI
+                </button>
+
+
+                <button class="move forward" onclick="moveXForward()">
+                    X TIẾN →
+                </button>
+
+            </div>
+
+        </div>
+
+
+        <!-- ===================== -->
+        <!-- TRỤC Y + Z -->
+        <!-- ===================== -->
+
+        <div class="axis">
+
+            <h2>TRỤC Y + Z</h2>
+
+            <div class="axis-buttons">
+
+                <button class="move backward" onclick="moveYZBackward()">
+                    ← YZ LÙI
+                </button>
+
+
+                <button class="move forward" onclick="moveYZForward()">
+                    YZ TIẾN →
+                </button>
+
+            </div>
+
+        </div>
+
+
+        <!-- ===================== -->
+        <!-- BÀN PHÍM TỌA ĐỘ -->
+        <!-- ===================== -->
+
+        <div class="axis">
+
+            <h2>BÀN PHÍM TỌA ĐỘ</h2>
+
+            <div class="keypad-config">
+
+                <div>
+                    <label>X (vị trí phím 1)</label>
+                    <input type="number" id="posX" value="0">
+                </div>
+
+                <div>
+                    <label>Y (vị trí phím 1)</label>
+                    <input type="number" id="posY" value="0">
+                </div>
+
+                <div>
+                    <label>Spach X (khoảng cách)</label>
+                    <input type="number" id="spachX" value="100">
+                </div>
+
+                <div>
+                    <label>Spach Y (khoảng cách)</label>
+                    <input type="number" id="spachY" value="100">
+                </div>
+
+            </div>
+
+            <div class="keypad-grid">
+
+                <button class="key" onclick="goToKey('1')">1</button>
+                <button class="key" onclick="goToKey('2')">2</button>
+                <button class="key" onclick="goToKey('3')">3</button>
+
+                <button class="key" onclick="goToKey('4')">4</button>
+                <button class="key" onclick="goToKey('5')">5</button>
+                <button class="key" onclick="goToKey('6')">6</button>
+
+                <button class="key" onclick="goToKey('7')">7</button>
+                <button class="key" onclick="goToKey('8')">8</button>
+                <button class="key" onclick="goToKey('9')">9</button>
+
+                <button class="key home" onclick="setOrigin()">ORIGIN</button>
+                <button class="key" onclick="goToKey('0')">0</button>
+                <button class="key hash" disabled>#</button>
+
+            </div>
+
+            <div class="pos-display" id="posDisplay">
+                Vị trí hiện tại (step): X = 0, Y = 0
+            </div>
+
+        </div>
+
+
+        <!-- ===================== -->
+        <!-- CHẠY TỰ ĐỘNG -->
+        <!-- ===================== -->
+
+        <div class="axis">
+
+            <h2>CHẠY TỰ ĐỘNG</h2>
+
+            <div style="margin-bottom: 15px; text-align: left;">
+                <label style="font-weight: bold; color: #555; display: block; margin-bottom: 6px;">Nhập dãy số:</label>
+                <input type="text" id="sequenceInput" placeholder="Ví dụ: 123456" style="width: 100%;">
+            </div>
+
+            <div style="margin-bottom: 15px; text-align: left;">
+                <label style="font-weight: bold; color: #555; display: block; margin-bottom: 6px;">Thời gian chờ (ms):</label>
+                <input type="number" id="delayInput" value="1000" style="width: 100%;">
+            </div>
+
+            <div class="axis-buttons">
+                <button class="move forward" style="width: 100%; margin-top: 10px;" onclick="runSequence()">
+                    🚀 ACTIVE
+                </button>
+            </div>
+
+        </div>
+
+    </div>
+
+
+
+    <script>
+
+
+        let port;
+        let writer;
+
+        // Vị trí hiện tại của máy, tính bằng step.
+        // Giá trị này CHỈ đúng sau khi bạn đã bấm nút ORIGIN
+        // (đọc từ ô X, Y trong phần cấu hình bàn phím).
+        // Trước khi bấm ORIGIN, mặc định coi là (0,0).
+        let currentX = 0;
+        let currentY = 0;
+
+
+        // ==============================
+        // KẾT NỐI ARDUINO
+        // ==============================
+
+        async function connectSerial() {
+
+            try {
+
+                port =
+                    await navigator.serial.requestPort();
+
+
+                await port.open({
+
+                    baudRate: 115200
+
+                });
+
+
+                const encoder =
+                    new TextEncoderStream();
+
+
+                encoder.readable.pipeTo(
+                    port.writable
+                );
+
+
+                writer =
+                    encoder.writable.getWriter();
+
+
+                document.getElementById("status")
+                    .innerText =
+                    "🟢 Đã kết nối Arduino";
+
+
+            }
+            catch (error) {
+
+                console.error(error);
+
+
+                document.getElementById("status")
+                    .innerText =
+                    "🔴 Không kết nối được";
+
+            }
+
+        }
+
+
+        // ==============================
+        // GỬI LỆNH
+        // ==============================
+
+        async function sendCommand(command) {
+
+            if (!writer) {
+
+                alert(
+                    "Hãy kết nối Arduino trước!"
+                );
+
+                return;
+
+            }
+
+
+            try {
+
+                await writer.write(
+                    command + "\n"
+                );
+
+
+                console.log(
+                    "Sent:",
+                    command
+                );
+
+            }
+            catch (error) {
+
+                console.error(error);
+
+                alert(
+                    "Không gửi được lệnh!"
+                );
+
+            }
+
+        }
+
+
+        // ==============================
+        // LẤY SỐ STEP
+        // ==============================
+
+        function getSteps() {
+
+            const steps =
+                parseInt(
+                    document.getElementById("steps").value
+                );
+
+
+            if (!steps || steps <= 0) {
+
+                alert(
+                    "Nhập số step lớn hơn 0"
+                );
+
+                return null;
+
+            }
+
+
+            return steps;
+
+        }
+
+
+
+        // =================================
+        // TRỤC X TIẾN
+        // Arduino: X100
+        // =================================
+
+        function moveXForward() {
+
+            const steps = getSteps();
+
+            if (!steps) return;
+
+
+            sendCommand(
+                "X" + steps
+            );
+
+        }
+
+
+
+        // =================================
+        // TRỤC X LÙI
+        // Arduino: X-100
+        // =================================
+
+        function moveXBackward() {
+
+            const steps = getSteps();
+
+            if (!steps) return;
+
+
+            sendCommand(
+                "X-" + steps
+            );
+
+        }
+
+
+
+        // =================================
+        // Y + Z TIẾN
+        // Arduino: F100
+        // =================================
+
+        function moveYZForward() {
+
+            const steps = getSteps();
+
+            if (!steps) return;
+
+
+            sendCommand(
+                "F" + steps
+            );
+
+        }
+
+
+
+        // =================================
+        // Y + Z LÙI
+        // Arduino: B100
+        // =================================
+
+        function moveYZBackward() {
+
+            const steps = getSteps();
+
+            if (!steps) return;
+
+
+            sendCommand(
+                "B" + steps
+            );
+
+        }
+
+
+
+        // =====================================================
+        // BÀN PHÍM TỌA ĐỘ
+        //
+        // Sơ đồ lưới (giống bàn phím điện thoại), (cột, hàng)
+        // tính từ phím 1 = (0,0):
+        //
+        // 1(0,0)  2(1,0)  3(2,0)
+        // 4(0,1)  5(1,1)  6(2,1)
+        // 7(0,2)  8(1,2)  9(2,2)
+        //   #    0(1,3)     #
+        //
+        // Vị trí đích của mỗi phím:
+        //   X_đích = X(phím1) + cột * spachX
+        //   Y_đích = Y(phím1) + hàng * spachY
+        // =====================================================
+
+        const KEY_LAYOUT = {
+            '1': [0, 0],
+            '2': [1, 0],
+            '3': [2, 0],
+            '4': [0, 1],
+            '5': [1, 1],
+            '6': [2, 1],
+            '7': [0, 2],
+            '8': [1, 2],
+            '9': [2, 2],
+            '0': [1, 3]
+        };
+
+
+        function getConfig() {
+
+            const x1 = parseFloat(document.getElementById("posX").value) || 0;
+            const y1 = parseFloat(document.getElementById("posY").value) || 0;
+            const spachX = parseFloat(document.getElementById("spachX").value) || 0;
+            const spachY = parseFloat(document.getElementById("spachY").value) || 0;
+
+            return { x1, y1, spachX, spachY };
+
+        }
+
+
+        function getKeyTargetPosition(key) {
+
+            const { x1, y1, spachX, spachY } = getConfig();
+
+            const [col, row] = KEY_LAYOUT[key];
+
+            return {
+                x: x1 + col * spachX,
+                y: y1 + row * spachY
+            };
+
+        }
+
+
+        function updatePosDisplay() {
+
+            document.getElementById("posDisplay").innerText =
+                "Vị trí hiện tại (step): X = " + currentX + ", Y = " + currentY;
+
+        }
+
+
+        // =================================
+        // DI CHUYỂN TỰ ĐỘNG ĐẾN VỊ TRÍ CỦA PHÍM
+        // =================================
+
+        async function goToKey(key) {
+
+            if (!writer) {
+
+                alert("Hãy kết nối Arduino trước!");
+
+                return;
+
+            }
+
+
+            const target = getKeyTargetPosition(key);
+
+            const deltaX = Math.round(target.x - currentX);
+            const deltaY = Math.round(target.y - currentY);
+
+
+            // Di chuyển trục X (nếu cần)
+            if (deltaX !== 0) {
+
+                await sendCommand("X" + deltaX);
+
+            }
+
+
+            // Di chuyển trục Y + Z (nếu cần)
+            if (deltaY !== 0) {
+
+                if (deltaY > 0) {
+
+                    await sendCommand("F" + deltaY);
+
+                } else {
+
+                    await sendCommand("B" + Math.abs(deltaY));
+
+                }
+
+            }
+
+
+            // Cập nhật lại vị trí hiện tại đã lưu trong bộ nhớ
+            currentX = target.x;
+            currentY = target.y;
+
+            updatePosDisplay();
+
+        }
+
+
+        // =================================
+        // ORIGIN
+        //
+        // KHÔNG di chuyển máy thật.
+        //
+        // Dùng khi bạn tự tay canh máy CNC đến đúng vị trí
+        // (thường là vị trí của phím "1"), sau đó gõ tọa độ
+        // vị trí đó vào 2 ô X và Y ở trên, rồi bấm ORIGIN.
+        //
+        // Phần mềm sẽ LƯU tọa độ đó làm "vị trí hiện tại",
+        // từ đó tính đường đi chính xác cho các phím số.
+        //
+        // => Bắt buộc phải bấm ORIGIN ít nhất 1 lần trước khi
+        //    dùng bàn phím số, nếu không delta sẽ tính sai.
+        // =================================
+
+        function setOrigin() {
+
+            const { x1, y1 } = getConfig();
+
+            currentX = x1;
+            currentY = y1;
+
+            updatePosDisplay();
+
+            console.log("Đã đặt ORIGIN: X=" + currentX + ", Y=" + currentY);
+
+        }
+
+
+        // =================================
+        // CHẠY TỰ ĐỘNG THEO DÃY SỐ
+        // =================================
+
+        async function runSequence() {
+
+            const seq = document.getElementById("sequenceInput").value.trim();
+            const delay = parseInt(document.getElementById("delayInput").value) || 1000;
+
+            if (!seq) {
+                alert("Vui lòng nhập dãy số!");
+                return;
+            }
+
+            for (let i = 0; i < seq.length; i++) {
+                
+                const char = seq[i];
+                
+                if (KEY_LAYOUT[char]) {
+                    
+                    console.log("Đang chạy tới phím: " + char);
+                    await goToKey(char);
+                    
+                    // Chờ một khoảng thời gian trước khi chạy phím tiếp theo
+                    if (i < seq.length - 1) {
+                        await new Promise(r => setTimeout(r, delay));
+                    }
+                    
+                }
+            }
+            
+            console.log("Hoàn thành chạy tự động!");
+
+        }
+
+
+    </script>
+
+
+</body>
+
+</html>
