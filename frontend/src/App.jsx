@@ -5,6 +5,7 @@ import SettingsPanel from './components/SettingsPanel';
 import KeypadGrid from './components/KeypadGrid';
 import ManualControl from './components/ManualControl';
 import SequenceControl from './components/SequenceControl';
+import WebcamOcrPanel from './components/WebcamOcrPanel';
 
 function App() {
   const [isConnected, setIsConnected] = useState(false);
@@ -53,6 +54,7 @@ function App() {
           <section><KeypadGrid /></section>
           <section><ManualControl /></section>
           <section className="control-grid__sequence"><SequenceControl /></section>
+          <section className="control-grid__webcam"><WebcamOcrPanel /></section>
         </div>
       </div>
     </div>

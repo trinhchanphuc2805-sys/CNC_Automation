@@ -78,7 +78,8 @@ body {
 }
 
 .control-grid__settings,
-.control-grid__sequence {
+.control-grid__sequence,
+.control-grid__webcam {
   grid-column: 1 / -1;
 }
 
@@ -97,8 +98,214 @@ body {
   }
 
   .control-grid__settings,
-  .control-grid__sequence {
+  .control-grid__sequence,
+  .control-grid__webcam {
     grid-column: auto;
+  }
+}
+
+.webcam-ocr-panel {
+  background: #102a43;
+  color: #f8fafc;
+  border-radius: 1.25rem;
+  padding: clamp(1.15rem, 3vw, 1.75rem);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.2);
+}
+
+.webcam-ocr-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.webcam-ocr-kicker {
+  color: #67e8f9;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  margin: 0 0 0.35rem;
+}
+
+.webcam-ocr-panel .section-title {
+  color: #f8fafc;
+  margin-bottom: 0.3rem;
+}
+
+.webcam-ocr-description {
+  color: #b7c8d9;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.webcam-ocr-status {
+  flex: 0 0 auto;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid #3b556d;
+  border-radius: 999px;
+  color: #b7c8d9;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.webcam-ocr-status--matched {
+  color: #99f6e4;
+  border-color: #14b8a6;
+}
+
+.webcam-ocr-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.5fr repeat(2, minmax(120px, 0.7fr));
+  gap: 0.8rem;
+}
+
+.webcam-ocr-controls label {
+  color: #b7c8d9;
+  display: grid;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.webcam-ocr-controls input,
+.webcam-ocr-controls select {
+  min-width: 0;
+  border: 1px solid #3b556d;
+  border-radius: 0.55rem;
+  background: #173b59;
+  color: #f8fafc;
+  padding: 0.7rem 0.75rem;
+  outline: none;
+}
+
+.webcam-ocr-controls input:focus,
+.webcam-ocr-controls select:focus {
+  border-color: #67e8f9;
+  box-shadow: 0 0 0 2px rgba(103, 232, 249, 0.2);
+}
+
+.webcam-ocr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+
+.webcam-preview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 1rem;
+}
+
+.webcam-preview video,
+.webcam-preview img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid #3b556d;
+  border-radius: 0.7rem;
+  background: #071a2b;
+  object-fit: contain;
+}
+
+.webcam-preview__error {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 1.5rem;
+  border: 1px dashed #b45309;
+  border-radius: 0.7rem;
+  color: #fde68a;
+  text-align: center;
+}
+
+.webcam-ocr-button {
+  border: 0;
+  border-radius: 0.6rem;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 0.75rem 1rem;
+  transition: transform 0.15s, opacity 0.15s;
+}
+
+.webcam-ocr-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.webcam-ocr-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.webcam-ocr-button--quiet { background: #31516d; }
+.webcam-ocr-button--capture { background: #0f766e; }
+.webcam-ocr-button--primary { background: #0891b2; }
+
+.webcam-ocr-results {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 1rem;
+  border-top: 1px solid #31516d;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+
+.webcam-ocr-results > div {
+  min-width: 0;
+}
+
+.webcam-ocr-result-label {
+  color: #8fa9bf;
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.35rem;
+  text-transform: uppercase;
+}
+
+.webcam-ocr-results code,
+.webcam-ocr-results p {
+  color: #e2e8f0;
+  display: block;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 800px) {
+  .webcam-ocr-controls,
+  .webcam-ocr-results {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .webcam-preview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .webcam-ocr-header {
+    display: block;
+  }
+
+  .webcam-ocr-status {
+    display: inline-block;
+    margin-top: 0.8rem;
+  }
+
+  .webcam-ocr-controls,
+  .webcam-ocr-results {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .webcam-ocr-button {
+    flex: 1 1 100%;
   }
 }
 
