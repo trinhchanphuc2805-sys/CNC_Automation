@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from routers import cnc, com, keypad, webcam
+from routers import cnc, com, keypad, testcase, webcam
 
 
 app = FastAPI(title="CNC Control API")
@@ -20,9 +20,10 @@ app.include_router(com.router)
 app.include_router(keypad.router)
 app.include_router(cnc.router)
 app.include_router(webcam.router)
+app.include_router(testcase.router)
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

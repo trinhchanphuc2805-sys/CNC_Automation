@@ -11,6 +11,7 @@ class CNCService:
         cnc = self.controller
         return {
             "connected": cnc.is_connected(),
+            "port": cnc.serial_port.port if (cnc.serial_port and cnc.serial_port.is_open) else None,
             "current_x": cnc.current_x,
             "current_y": cnc.current_y,
             "current_a": cnc.current_a,
