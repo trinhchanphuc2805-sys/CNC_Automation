@@ -42,6 +42,8 @@ class TestStep(BaseModel):
     delay_ms: int = Field(500, description="Delay after action in milliseconds")
     description: Optional[str] = ""
     status: str = Field("idle", description="idle, running, passed, failed")
+    cnc_x: Optional[float] = Field(None, description="Physical CNC coordinate X")
+    cnc_y: Optional[float] = Field(None, description="Physical CNC coordinate Y")
 
 
 class GenerateTestCaseResponse(BaseModel):
@@ -67,58 +69,58 @@ def _rule_based_fallback(prompt: str) -> List[Dict[str, Any]]:
             {
                 "id": 1,
                 "action": "CLICK",
-                "target": "Ô nhập Email / SĐT",
+                "target": "Email / Phone Input Field",
                 "value": email_val,
                 "delay_ms": 600,
-                "description": f"Chạm vào ô nhập tài khoản và điền '{email_val}'",
+                "description": f"Tap account input field and type '{email_val}'",
                 "status": "idle",
             },
             {
                 "id": 2,
                 "action": "CLICK",
-                "target": "Ô nhập Mật khẩu",
+                "target": "Password Input Field",
                 "value": pass_val,
                 "delay_ms": 600,
-                "description": "Chạm vào ô nhập mật khẩu và điền mật khẩu",
+                "description": "Tap password field and type password",
                 "status": "idle",
             },
             {
                 "id": 3,
                 "action": "CLICK",
-                "target": "Nút Đăng nhập",
+                "target": "Login Button",
                 "value": "",
                 "delay_ms": 1200,
-                "description": "Nhấn nút Đăng nhập Facebook để gửi form",
+                "description": "Tap Login button to submit form",
                 "status": "idle",
             },
             {
                 "id": 4,
                 "action": "VERIFY",
-                "target": "Màn hình tiếp theo / Thông báo",
+                "target": "Dashboard / Next Screen",
                 "value": "",
                 "delay_ms": 1000,
-                "description": "Kiểm tra phản hồi của ứng dụng sau khi đăng nhập",
+                "description": "Verify application navigation after login",
                 "status": "idle",
             },
         ]
-    elif "thanh toán" in prompt_lower or "pos" in prompt_lower or "pay" in prompt_lower:
+    elif "thanh toán" in prompt_lower or "pos" in prompt_lower or "pay" in prompt_lower or "amount" in prompt_lower:
         steps = [
             {
                 "id": 1,
                 "action": "CLICK",
-                "target": "Ô nhập số tiền",
+                "target": "Amount Input Field",
                 "value": "50000",
                 "delay_ms": 500,
-                "description": "Chạm ô số tiền và nhập 50,000đ",
+                "description": "Tap amount field and input 50,000",
                 "status": "idle",
             },
             {
                 "id": 2,
                 "action": "CLICK",
-                "target": "Nút Xác nhận / Thanh toán",
+                "target": "Confirm / Pay Button",
                 "value": "",
                 "delay_ms": 1000,
-                "description": "Bấm nút xác nhận thanh toán",
+                "description": "Tap confirm payment button",
                 "status": "idle",
             },
         ]
@@ -127,7 +129,7 @@ def _rule_based_fallback(prompt: str) -> List[Dict[str, Any]]:
             {
                 "id": 1,
                 "action": "CLICK",
-                "target": "Phần tử mục tiêu",
+                "target": "Target Element",
                 "value": "",
                 "delay_ms": 600,
                 "description": prompt,
@@ -142,7 +144,7 @@ def _rule_based_fallback(prompt: str) -> List[Dict[str, Any]]:
 def generate_test_cases(req: GenerateTestCaseRequest):
     user_prompt = (req.prompt or "").strip()
     if not user_prompt:
-        raise HTTPException(status_code=400, detail="Vui lòng nhập mô tả kịch bản test")
+        raise HTTPException(status_code=400, detail="Please enter a test scenario description")
 
     client = get_openai_client()
     if client:
@@ -151,19 +153,19 @@ def generate_test_cases(req: GenerateTestCaseRequest):
                 "You are an industrial QA Automation Lead for hardware test rigs (CNC robot stylus touching smartphones, POS, and test screens).\n"
                 "Convert the user's natural language test requirement into a sequential, actionable test script.\n"
                 "Available Actions: 'CLICK' (touch target element), 'TYPE' (input text into target), 'WAIT' (pause execution), 'VERIFY' (verify UI state).\n"
-                "Target names must be clear, concise Vietnamese UI element names (e.g. 'Ô nhập Email / SĐT', 'Ô nhập Mật khẩu', 'Nút Đăng nhập', 'Icon Facebook').\n"
+                "Target names must be clear, concise English UI element names (e.g. 'Email / Phone Field', 'Password Field', 'Login Button', 'Key 1', 'Cancel Button').\n"
                 "Return JSON ONLY matching this exact structure:\n"
                 "{\n"
-                '  "test_name": "Tên kịch bản (e.g. Kiểm thử đăng nhập Facebook)",\n'
-                '  "description": "Mô tả ngắn gọn mục đích kiểm thử",\n'
+                '  "test_name": "Test Scenario Name (e.g. Facebook Login Flow)",\n'
+                '  "description": "Brief summary of the test objective",\n'
                 '  "steps": [\n'
                 '    {\n'
                 '      "id": 1,\n'
                 '      "action": "CLICK",\n'
-                '      "target": "Tên phần tử mục tiêu",\n'
-                '      "value": "giá trị nếu có",\n'
+                '      "target": "Target element name",\n'
+                '      "value": "optional value",\n'
                 '      "delay_ms": 600,\n'
-                '      "description": "Mô tả chi tiết bước này",\n'
+                '      "description": "Action description",\n'
                 '      "status": "idle"\n'
                 '    }\n'
                 '  ]\n'
@@ -198,6 +200,8 @@ def generate_test_cases(req: GenerateTestCaseRequest):
                         delay_ms=int(s.get("delay_ms", 600)),
                         description=str(s.get("description", "")),
                         status="idle",
+                        cnc_x=float(s["cnc_x"]) if s.get("cnc_x") is not None else None,
+                        cnc_y=float(s["cnc_y"]) if s.get("cnc_y") is not None else None,
                     )
                 )
 

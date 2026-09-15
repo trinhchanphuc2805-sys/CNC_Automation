@@ -36,8 +36,73 @@ def get_openai_client() -> OpenAI:
     return _openai_client
 
 
+def standardize_label(label: str) -> str:
+    """Ensure detected labels are always converted to professional, standardized English names."""
+    if not label:
+        return "Target Element"
+    lbl = label.strip()
+    lbl_lower = lbl.lower()
+
+    # Normalize digits 0-9: e.g. "nút 1", "phím 1", "key 1", "button 1", "1"
+    m = re.search(r'(?:nut|nút|phim|phím|key|button|số|so)?\s*([0-9])\b', lbl_lower)
+    if m and not any(k in lbl_lower for k in ["nhap", "nhập", "amount", "tien", "tiền", "input"]):
+        return f"Key {m.group(1)}"
+
+    if any(k in lbl_lower for k in ["thanh toan", "thanh toán", "pay", "payment"]):
+        return "Pay Button"
+    if any(k in lbl_lower for k in ["huy", "hủy", "cancel"]):
+        return "Cancel Button"
+    if any(k in lbl_lower for k in ["enter", "ok", "xac nhan", "xác nhận"]):
+        return "Enter / OK Key"
+    if any(k in lbl_lower for k in ["so tien", "số tiền", "amount", "nhap", "nhập", "input"]):
+        return "Amount Input Field"
+    if any(k in lbl_lower for k in ["dang nhap", "đăng nhập", "login"]):
+        return "Login Button"
+    if any(k in lbl_lower for k in ["mat khau", "mật khẩu", "password"]):
+        return "Password Field"
+    if any(k in lbl_lower for k in ["email", "sdt", "sđt", "phone"]):
+        return "Email / Phone Field"
+
+    return lbl
+
+
 class AIDetectorService:
     """Service for detecting objects, buttons, markings, or targets inside a calibrated ROI."""
+
+    def _find_device_screen_region(self, image: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+        """
+        Locates the illuminated display screen of a smartphone, POS terminal, or tablet
+        placed inside the workspace. Returns (x, y, w, h) in image pixels.
+        """
+        if image is None:
+            return None
+        h, w = image.shape[:2]
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # Test adaptive binary thresholds for the bright illuminated display
+        for thresh_val in [150, 140, 165, 130, 175]:
+            _, thresh = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY)
+            # Mask out outermost borders (15px)
+            thresh[0:15, :] = 0
+            thresh[-15:, :] = 0
+            thresh[:, 0:15] = 0
+            thresh[:, -15:] = 0
+
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            candidates = []
+            for c in contours:
+                area = cv2.contourArea(c)
+                # Device screen typically occupies between 3% and 70% of the workspace
+                if (w * h * 0.03) < area < (w * h * 0.70):
+                    bx, by, bw, bh = cv2.boundingRect(c)
+                    aspect = float(bh) / max(1, bw)
+                    # Screens are rectangular (portrait 1.15-2.6 or landscape 0.45-0.85)
+                    if 1.15 <= aspect <= 2.6 or 0.45 <= aspect <= 0.85:
+                        candidates.append((area, (bx, by, bw, bh)))
+            if candidates:
+                candidates.sort(key=lambda item: item[0], reverse=True)
+                return candidates[0][1]
+        return None
 
     def detect_in_region(
         self,
@@ -75,12 +140,36 @@ class AIDetectorService:
             inv_M = None
             is_warped = False
 
+        # 1. Check if an electronic device screen (POS/phone/tablet) is resting inside the workspace
+        screen_roi = self._find_device_screen_region(active_image)
+        screen_crop = None
+        if screen_roi is not None:
+            sx, sy, sw, sh = screen_roi
+            screen_crop = active_image[sy:sy + sh, sx:sx + sw]
+            logger.info("Auto-detected device screen at x=%d, y=%d, w=%d, h=%d in workspace", sx, sy, sw, sh)
+
         # Run selected detection model
         try:
-            if model_type.lower() == "opencv":
-                raw_objects = self._detect_opencv_shapes(active_image, prompt)
+            if screen_crop is not None:
+                if model_type.lower() == "opencv":
+                    screen_objects = self._detect_opencv_shapes(screen_crop, prompt)
+                else:
+                    screen_objects = self._detect_openai_vision(screen_crop, prompt, is_cropped_screen=True)
+
+                raw_objects = []
+                for obj in screen_objects:
+                    raw_objects.append({
+                        **obj,
+                        "center_x": float(sx + obj["center_x"]),
+                        "center_y": float(sy + obj["center_y"]),
+                        "width": float(obj.get("width", 30)),
+                        "height": float(obj.get("height", 30)),
+                    })
             else:
-                raw_objects = self._detect_openai_vision(active_image, prompt)
+                if model_type.lower() == "opencv":
+                    raw_objects = self._detect_opencv_shapes(active_image, prompt)
+                else:
+                    raw_objects = self._detect_openai_vision(active_image, prompt, is_cropped_screen=False)
         except Exception as exc:
             logger.exception("Detection failed: %s", exc)
             return {"success": False, "message": str(exc), "objects": []}
@@ -91,24 +180,24 @@ class AIDetectorService:
 
         # Keypad grid map for direct physical step anchoring from Key 1
         keypad_grid = {
-            "1": (0, 0), "nút 1": (0, 0), "phím 1": (0, 0), "key 1": (0, 0),
-            "2": (1, 0), "nút 2": (1, 0), "phím 2": (1, 0), "key 2": (1, 0),
-            "3": (2, 0), "nút 3": (2, 0), "phím 3": (2, 0), "key 3": (2, 0),
-            "4": (0, 1), "nút 4": (0, 1), "phím 4": (0, 1), "key 4": (0, 1),
-            "5": (1, 1), "nút 5": (1, 1), "phím 5": (1, 1), "key 5": (1, 1),
-            "6": (2, 1), "nút 6": (2, 1), "phím 6": (2, 1), "key 6": (2, 1),
-            "7": (0, 2), "nút 7": (0, 2), "phím 7": (0, 2), "key 7": (0, 2),
-            "8": (1, 2), "nút 8": (1, 2), "phím 8": (1, 2), "key 8": (1, 2),
-            "9": (2, 2), "nút 9": (2, 2), "phím 9": (2, 2), "key 9": (2, 2),
-            "0": (1, 3), "nút 0": (1, 3), "phím 0": (1, 3), "key 0": (1, 3),
-            "hủy": (0, 3), "nút hủy": (0, 3), "cancel": (0, 3),
-            "thanh toán": (2, 3), "nút thanh toán": (2, 3), "pay": (2, 3), "enter": (2, 3), "ok": (2, 3),
+            "1": (0, 0), "key 1": (0, 0), "button 1": (0, 0), "nút 1": (0, 0), "phím 1": (0, 0),
+            "2": (1, 0), "key 2": (1, 0), "button 2": (1, 0), "nút 2": (1, 0), "phím 2": (1, 0),
+            "3": (2, 0), "key 3": (2, 0), "button 3": (2, 0), "nút 3": (2, 0), "phím 3": (2, 0),
+            "4": (0, 1), "key 4": (0, 1), "button 4": (0, 1), "nút 4": (0, 1), "phím 4": (0, 1),
+            "5": (1, 1), "key 5": (1, 1), "button 5": (1, 1), "nút 5": (1, 1), "phím 5": (1, 1),
+            "6": (2, 1), "key 6": (2, 1), "button 6": (2, 1), "nút 6": (2, 1), "phím 6": (2, 1),
+            "7": (0, 2), "key 7": (0, 2), "button 7": (0, 2), "nút 7": (0, 2), "phím 7": (0, 2),
+            "8": (1, 2), "key 8": (1, 2), "button 8": (1, 2), "nút 8": (1, 2), "phím 8": (1, 2),
+            "9": (2, 2), "key 9": (2, 2), "button 9": (2, 2), "nút 9": (2, 2), "phím 9": (2, 2),
+            "0": (1, 3), "key 0": (1, 3), "button 0": (1, 3), "nút 0": (1, 3), "phím 0": (1, 3),
+            "cancel": (0, 3), "cancel button": (0, 3), "hủy": (0, 3), "nút hủy": (0, 3),
+            "pay": (2, 3), "pay button": (2, 3), "enter": (2, 3), "ok": (2, 3), "enter / ok key": (2, 3), "thanh toán": (2, 3), "nút thanh toán": (2, 3),
         }
 
         # Locate reference keys in raw_objects if available
-        key1_item = next((it for it in raw_objects if it.get("label", "").strip().lower() in ("nút 1", "phím 1", "1", "key 1")), None)
-        key2_item = next((it for it in raw_objects if it.get("label", "").strip().lower() in ("nút 2", "phím 2", "2", "key 2")), None)
-        key5_item = next((it for it in raw_objects if it.get("label", "").strip().lower() in ("nút 5", "phím 5", "5", "key 5")), None)
+        key1_item = next((it for it in raw_objects if it.get("label", "").strip().lower() in ("key 1", "button 1", "nút 1", "phím 1", "1")), None)
+        key2_item = next((it for it in raw_objects if it.get("label", "").strip().lower() in ("key 2", "button 2", "nút 2", "phím 2", "2")), None)
+        key5_item = next((it for it in raw_objects if it.get("label", "").strip().lower() in ("key 5", "button 5", "nút 5", "phím 5", "5")), None)
 
         px_per_step_x = None
         px_per_step_y = None
@@ -164,7 +253,15 @@ class AIDetectorService:
 
             # Physical coordinates calculation (prioritize physical keypad anchoring)
             clean_lbl = item.get("label", "").strip().lower()
-            if key1_ref and key_spacing and clean_lbl in keypad_grid:
+            if screen_roi is not None:
+                # Screen was automatically localized inside the calibrated workspace
+                eff_norm_x = (1.0 - norm_x) if invert_x else norm_x
+                eff_norm_y = (1.0 - norm_y) if invert_y else norm_y
+                if swap_xy:
+                    eff_norm_x, eff_norm_y = eff_norm_y, eff_norm_x
+                cnc_x = x1 + eff_norm_x * span_x + off_x
+                cnc_y = y1 + eff_norm_y * span_y + off_y
+            elif key1_ref and key_spacing and clean_lbl in keypad_grid:
                 col, row = keypad_grid[clean_lbl]
                 k1_x, k1_y = key1_ref
                 sp_x, sp_y = key_spacing
@@ -189,7 +286,7 @@ class AIDetectorService:
 
             processed_objects.append({
                 "id": idx + 1,
-                "label": item.get("label", f"Target {idx + 1}"),
+                "label": standardize_label(item.get("label", f"Target {idx + 1}")),
                 "confidence": round(float(item.get("confidence", 0.9)), 2),
                 "pixel_x": round(orig_x, 1),
                 "pixel_y": round(orig_y, 1),
@@ -213,44 +310,80 @@ class AIDetectorService:
             "cnc_bounds": {"x1": x1, "y1": y1, "span_x": span_x, "span_y": span_y},
         }
 
-    def _detect_openai_vision(self, image: np.ndarray, prompt: str) -> List[Dict[str, Any]]:
+    def _detect_openai_vision(self, image: np.ndarray, prompt: str, is_cropped_screen: bool = False) -> List[Dict[str, Any]]:
         client = get_openai_client()
         h, w = image.shape[:2]
         base64_img = encode_image_to_base64(image)
         raw_b64 = base64_img.split(",", 1)[1] if "," in base64_img else base64_img
 
-        system_instruction = (
-            "You are an industrial precision computer vision and UI automation alignment assistant for a robotic CNC stylus tester.\n"
-            "The image provided is a top-down workspace view. Resting on the table is an electronic device (such as a POS payment terminal, smartphone, or tablet).\n\n"
-            "CRITICAL SPATIAL CONSTRAINTS:\n"
-            "1. First detect the bounding box of the electronic device's illuminated display screen:\n"
-            "   screen_bbox: [xmin, ymin, xmax, ymax] normalized [0.0 to 1.0]. "
-            "If the image already tightly frames the screen, screen_bbox is [0.0, 0.0, 1.0, 1.0].\n"
-            "2. ALL touchable UI elements (buttons, keys 1-9, 0, Cancel, OK, Enter, amount field, input boxes) "
-            "reside STRICTLY INSIDE THE SCREEN of the device. "
-            "Do NOT place targets on the wooden table, scissors, paper roll, or surrounding table edges!\n"
-            "3. For keypad / POS screens:\n"
-            "   - Detect the amount display / header at top of the app.\n"
-            "   - Detect numeric keys 1, 2, 3, 4, 5, 6, 7, 8, 9, 0 strictly inside the keypad grid on screen.\n"
-            "   - Detect action buttons (e.g. 'Nút Hủy / Cancel', 'Nút Thanh toán / OK / Enter').\n"
-            f"User target prompt: '{prompt}'.\n\n"
-            "Return JSON ONLY with this exact schema:\n"
-            "{\n"
-            '  "screen_bbox": [xmin, ymin, xmax, ymax],\n'
-            '  "targets": [\n'
-            '    {\n'
-            '      "label": "Accurate Vietnamese name (e.g. Ô nhập số tiền, Nút 1, Nút 2, Nút Hủy, Nút Thanh toán)",\n'
-            '      "confidence": 0.98,\n'
-            '      "center_x_norm": 0.50,\n'
-            '      "center_y_norm": 0.55,\n'
-            '      "width_norm": 0.08,\n'
-            '      "height_norm": 0.05\n'
-            '    }\n'
-            '  ]\n'
-            "}\n"
-            "Note: center_x_norm and center_y_norm MUST be normalized between 0.0 and 1.0. "
-            "Every target MUST lie strictly inside screen_bbox! Do NOT include explanation text."
-        )
+        if is_cropped_screen:
+            system_instruction = (
+                "You are an industrial precision computer vision and UI touch localization assistant for a robotic CNC stylus tester.\n"
+                "The image provided is a tightly CROPPED TOUCHSCREEN display of an electronic device (such as a POS payment terminal or smartphone).\n"
+                "The entire image corresponds strictly to the active touchscreen display area.\n\n"
+                "UI ELEMENTS TO LOCATE:\n"
+                "1. If an amount input field or display header is visible (e.g. '$0.00', 'Purchase', header text), detect it.\n"
+                "2. Detect numeric keys: 1, 2, 3, 4, 5, 6, 7, 8, 9, 0 strictly inside the keypad grid.\n"
+                "3. Detect action buttons (e.g. Cancel Button, Pay Button, Enter / OK Key, Back).\n"
+                f"User target prompt: '{prompt}'.\n\n"
+                "Return JSON ONLY with this exact schema:\n"
+                "{\n"
+                '  "targets": [\n'
+                '    {\n'
+                '      "label": "Professional English name (e.g. Amount Input Field, Key 1, Key 2, Key 3, Key 4, Key 5, Key 6, Key 7, Key 8, Key 9, Key 0, Cancel Button, Pay Button, Enter / OK Key)",\n'
+                '      "confidence": 0.98,\n'
+                '      "center_x_norm": 0.50,\n'
+                '      "center_y_norm": 0.55,\n'
+                '      "width_norm": 0.25,\n'
+                '      "height_norm": 0.12\n'
+                '    }\n'
+                '  ]\n'
+                "}\n"
+                "Note: center_x_norm and center_y_norm MUST be normalized between 0.0 and 1.0 within this screen image. Do NOT include explanation text."
+            )
+            user_text = (
+                f"Identify and locate all requested UI targets inside this touchscreen display. Prompt: '{prompt}'.\n"
+                "Make sure to detect every numeric key (1, 2, 3, 4, 5, 6, 7, 8, 9, 0), "
+                "Cancel button, Pay/Confirm button, and amount display field on the screen."
+            )
+        else:
+            system_instruction = (
+                "You are an industrial precision computer vision and UI automation alignment assistant for a robotic CNC stylus tester.\n"
+                "The image provided is a top-down workspace view. Resting on the table is an electronic device (such as a POS payment terminal, smartphone, or tablet).\n\n"
+                "CRITICAL SPATIAL CONSTRAINTS:\n"
+                "1. First detect the bounding box of the electronic device's illuminated display screen:\n"
+                "   screen_bbox: [xmin, ymin, xmax, ymax] normalized [0.0 to 1.0]. "
+                "If the image already tightly frames the screen, screen_bbox is [0.0, 0.0, 1.0, 1.0].\n"
+                "2. ALL touchable UI elements (buttons, keys 1-9, 0, Cancel, OK, Enter, amount field, input boxes) "
+                "reside STRICTLY INSIDE THE SCREEN of the device. "
+                "Do NOT place targets on the wooden table, scissors, paper roll, or surrounding table edges!\n"
+                "3. For keypad / POS screens:\n"
+                "   - Detect the amount display / header at top of the app.\n"
+                "   - Detect numeric keys 1, 2, 3, 4, 5, 6, 7, 8, 9, 0 strictly inside the keypad grid on screen.\n"
+                "   - Detect action buttons (e.g. 'Cancel Button', 'Pay Button', 'Enter / OK Key').\n"
+                f"User target prompt: '{prompt}'.\n\n"
+                "Return JSON ONLY with this exact schema:\n"
+                "{\n"
+                '  "screen_bbox": [xmin, ymin, xmax, ymax],\n'
+                '  "targets": [\n'
+                '    {\n'
+                '      "label": "Professional English name (e.g. Amount Input Field, Key 1, Key 2, Key 3, Key 4, Cancel Button, Pay Button, Enter / OK Key)",\n'
+                '      "confidence": 0.98,\n'
+                '      "center_x_norm": 0.50,\n'
+                '      "center_y_norm": 0.55,\n'
+                '      "width_norm": 0.08,\n'
+                '      "height_norm": 0.05\n'
+                '    }\n'
+                '  ]\n'
+                "}\n"
+                "Note: center_x_norm and center_y_norm MUST be normalized between 0.0 and 1.0. "
+                "Every target MUST lie strictly inside screen_bbox! Do NOT include explanation text."
+            )
+            user_text = (
+                f"Identify and locate all requested UI targets inside the device screen. Target prompt: '{prompt}'.\n"
+                "Make sure to detect every numeric key (1, 2, 3, 4, 5, 6, 7, 8, 9, 0), "
+                "Cancel button, Pay/Confirm button, and amount display field on the screen."
+            )
 
         try:
             response = client.chat.completions.create(
@@ -263,11 +396,7 @@ class AIDetectorService:
                         "content": [
                             {
                                 "type": "text",
-                                "text": (
-                                    f"Identify and locate all requested UI targets inside the device screen. Target prompt: '{prompt}'.\n"
-                                    "Make sure to detect every numeric key (1, 2, 3, 4, 5, 6, 7, 8, 9, 0), "
-                                    "Cancel button, Pay/Confirm button, and amount display field on the screen."
-                                ),
+                                "text": user_text,
                             },
                             {
                                 "type": "image_url",
@@ -287,9 +416,9 @@ class AIDetectorService:
             targets = data.get("targets", [])
             screen_bbox = data.get("screen_bbox")
 
-            # Validate and clamp targets within screen_bbox so elements never spill onto wood
+            # Validate and clamp targets within screen_bbox if full workspace image
             min_x, min_y, max_x, max_y = 0.0, 0.0, 1.0, 1.0
-            if screen_bbox and len(screen_bbox) == 4:
+            if not is_cropped_screen and screen_bbox and len(screen_bbox) == 4:
                 try:
                     s_xmin, s_ymin, s_xmax, s_ymax = [float(v) for v in screen_bbox]
                     if 0.0 <= s_xmin < s_xmax <= 1.0 and 0.0 <= s_ymin < s_ymax <= 1.0:
@@ -304,7 +433,7 @@ class AIDetectorService:
                 w_norm = float(t.get("width_norm", 0.08))
                 h_norm = float(t.get("height_norm", 0.08))
 
-                # Clamp coordinates strictly inside screen boundaries
+                # Clamp coordinates strictly inside boundaries
                 cx_norm = max(min_x, min(max_x, cx_norm))
                 cy_norm = max(min_y, min(max_y, cy_norm))
 
@@ -416,7 +545,7 @@ class AIDetectorService:
                     
                     boxes = sorted(boxes, key=lambda b: b[1])
                     for b_idx, (sbx, sby, sbw, sbh) in enumerate(boxes[:6]):
-                        lbl = "Nút bấm" if b_idx >= len(boxes) - 1 else f"Ô nhập {b_idx + 1}"
+                        lbl = "Button" if b_idx >= len(boxes) - 1 else f"Input Field {b_idx + 1}"
                         results.append({
                             "label": f"{lbl} ({sbw}x{sbh}px)",
                             "confidence": 0.88,
@@ -449,7 +578,7 @@ class AIDetectorService:
                         circles = np.uint16(np.around(circles))
                         for c in circles[0, :][:6]:
                             results.append({
-                                "label": f"Nút tròn ({int(c[2]) * 2}px)",
+                                "label": f"Circular Button ({int(c[2]) * 2}px)",
                                 "confidence": 0.90,
                                 "center_x": float(bx + c[0]),
                                 "center_y": float(by + c[1]),

@@ -6,9 +6,9 @@ const TopHeader = ({ activeTab, isConnected }) => {
       {/* Left Breadcrumbs / Title */}
       <div className="flex items-center gap-3">
         <span className="text-xl font-bold text-slate-800">
-          {activeTab === 'ai-studio' && 'AI Test Studio & Script Recommendation'}
+          {activeTab === 'ai-studio' && 'AI Script Recommender'}
           {activeTab === 'vision-alignment' && 'Computer Vision & AI Alignment'}
-          {activeTab === 'cnc-settings' && 'CNC Machine Settings & Hardware Control'}
+          {activeTab === 'cnc-settings' && ' Machine Settings & Hardware Control'}
         </span>
       </div>
 
@@ -25,9 +25,7 @@ const TopHeader = ({ activeTab, isConnected }) => {
           </span>
         </div>
 
-        <span className="px-3 py-1 bg-[#404E67] text-white text-xs font-bold rounded-lg shadow-xs">
-          CNC Automation CV
-        </span>
+    
       </div>
     </header>
   );

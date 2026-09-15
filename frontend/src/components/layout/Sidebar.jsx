@@ -18,7 +18,7 @@ const Sidebar = ({
           </div>
           <div>
             <span className="font-extrabold text-sm tracking-tight text-white block leading-tight">
-              CNC <span className="text-[#fe5d70]">AUTOMATION</span>
+             <span className="text-[#fe5d70]">AUTOMATION</span>
             </span>
             <span className="text-[10px] text-slate-400 font-semibold tracking-wide uppercase">Computer Vision</span>
           </div>
@@ -62,7 +62,7 @@ const Sidebar = ({
                     d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
                   />
                 </svg>
-                <span>CNC Machine Settings</span>
+                <span>Settings Machine</span>
               </div>
               <span
                 className={`px-2 py-0.5 text-[10px] font-bold rounded-full text-white ${

@@ -4,8 +4,108 @@ import toast from 'react-hot-toast';
 
 const API_BASE = 'http://localhost:8000/api';
 
+export function formatLabelToEnglish(label) {
+  if (!label) return 'Target Element';
+  const l = String(label).trim();
+  const lower = l.toLowerCase();
+
+  // Normalize numbers 0-9: e.g. "nut 1", "nút 1", "phím 1", "key 1", "button 1", "1"
+  const m = lower.match(/(?:nut|nút|phim|phím|key|button|số|so)?\s*([0-9])\b/);
+  if (m && !lower.includes('nhap') && !lower.includes('nhập') && !lower.includes('amount') && !lower.includes('tien') && !lower.includes('tiền')) {
+    return `Key ${m[1]}`;
+  }
+
+  if (lower.includes('thanh toan') || lower.includes('thanh toán') || lower.includes('pay')) return 'Pay Button';
+  if (lower.includes('huy') || lower.includes('hủy') || lower.includes('cancel')) return 'Cancel Button';
+  if (lower.includes('enter') || lower.includes('ok')) return 'Enter / OK Key';
+  if (lower.includes('so tien') || lower.includes('số tiền') || lower.includes('nhap') || lower.includes('nhập') || lower.includes('amount')) return 'Amount Input Field';
+  if (lower.includes('dang nhap') || lower.includes('đăng nhập') || lower.includes('login')) return 'Login Button';
+  if (lower.includes('mat khau') || lower.includes('mật khẩu') || lower.includes('password')) return 'Password Field';
+  if (lower.includes('email') || lower.includes('phone') || lower.includes('sdt')) return 'Email / Phone Field';
+
+  return l;
+}
+
+// Intelligent matcher between test script steps and detected camera elements
+function matchStepWithDetected(step, detectedList) {
+  if (!step || !detectedList || detectedList.length === 0) return null;
+
+  const targetClean = (step.target || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const stepVal = (step.value || '').toLowerCase().trim();
+
+  // 1. Check if the step requests a specific digit (1-9, 0)
+  // Extracts digit from value or target: "Numeric Key 1" -> "1", "Key 1" -> "1", "1" -> "1"
+  let targetNumber = null;
+  if (/^\d+$/.test(stepVal)) {
+    targetNumber = stepVal;
+  } else {
+    const m = targetClean.match(/(?:nut|so|phim|key|bam|nhan|cham)?\s*(\d+)/);
+    if (m) {
+      targetNumber = m[1];
+    }
+  }
+
+  if (targetNumber !== null) {
+    // Priority match for that specific number button in detectedList
+    const numMatch = detectedList.find((d) => {
+      const dLabel = (d.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const dText = (d.text || '').toLowerCase().trim();
+      // Skip amount input field
+      if (dLabel.includes('so tien') || dLabel.includes('nhap') || dLabel.includes('amount') || dLabel.includes('input')) return false;
+      return (
+        dLabel === `nut ${targetNumber}` ||
+        dLabel === `key ${targetNumber}` ||
+        dLabel === targetNumber ||
+        dLabel.endsWith(` ${targetNumber}`) ||
+        dText === targetNumber
+      );
+    });
+    if (numMatch) return numMatch;
+  }
+
+  // 2. Check special action buttons
+  // Payment / Enter / OK button
+  if (targetClean.includes('thanh toan') || targetClean.includes('pay') || targetClean.includes('enter') || targetClean.includes('ok') || stepVal === 'enter' || stepVal === 'ok') {
+    const payMatch = detectedList.find((d) => {
+      const dLabel = (d.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return dLabel.includes('thanh toan') || dLabel.includes('pay') || dLabel.includes('enter') || dLabel.includes('ok');
+    });
+    if (payMatch) return payMatch;
+  }
+
+  // Cancel button
+  if (targetClean.includes('huy') || targetClean.includes('cancel')) {
+    const cancelMatch = detectedList.find((d) => {
+      const dLabel = (d.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return dLabel.includes('huy') || dLabel.includes('cancel');
+    });
+    if (cancelMatch) return cancelMatch;
+  }
+
+  // Amount input field
+  if (targetClean.includes('nhap') || targetClean.includes('so tien') || targetClean.includes('amount') || targetClean.includes('input') || step.action === 'TYPE') {
+    const inputMatch = detectedList.find((d) => {
+      const dLabel = (d.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return dLabel.includes('nhap') || dLabel.includes('so tien') || dLabel.includes('amount') || dLabel.includes('input');
+    });
+    if (inputMatch) return inputMatch;
+  }
+
+  // 3. Fallback: match by substring if above rules do not trigger
+  const generalMatch = detectedList.find((d) => {
+    const dLabel = (d.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return dLabel.includes(targetClean) || targetClean.includes(dLabel);
+  });
+  if (generalMatch) return generalMatch;
+
+  return null;
+}
+
 const WebcamOcrPanel = ({
   activeTestScript = null,
+  aiTargets: externalAiTargets = null,
+  setAiTargets: setExternalAiTargets = null,
+  onSendToAiStudio = null,
   onStepUpdate = null,
   onCompleteExecution = null,
   isExecutingScript = false,
@@ -51,7 +151,14 @@ const WebcamOcrPanel = ({
   // AI Target Detection states
   const [aiPrompt, setAiPrompt] = useState('all buttons, keys, or targets');
   const [aiModel, setAiModel] = useState('gpt4o');
-  const [aiTargets, setAiTargets] = useState([]);
+  const [localAiTargets, setLocalAiTargets] = useState([]);
+  const aiTargets = (externalAiTargets && externalAiTargets.length > 0) ? externalAiTargets : localAiTargets;
+  const setAiTargets = (val) => {
+    if (setExternalAiTargets) {
+      setExternalAiTargets(val);
+    }
+    setLocalAiTargets(val);
+  };
   const [warpedPreview, setWarpedPreview] = useState('');
   const [selectedTargetId, setSelectedTargetId] = useState(null);
   const [lastTargetPoint, setLastTargetPoint] = useState(null);
@@ -445,6 +552,7 @@ const WebcamOcrPanel = ({
 
   // 3. AI Target Detection
   const handleRunAiDetection = () => runAction('ai-detect', async () => {
+    toast.loading('AI Vision is analyzing frame & detecting targets...', { id: 'ai-detect' });
     const imageData = captureFrame();
     if (!imageData) throw new Error('Camera preview is not ready yet');
 
@@ -473,18 +581,26 @@ const WebcamOcrPanel = ({
 
     const response = await axios.post(`${API_BASE}/webcam/ai-detect`, payload);
     if (response.data.success) {
-      const detected = response.data.objects || [];
+      const rawDetected = response.data.objects || [];
+      const detected = rawDetected.map((obj) => ({
+        ...obj,
+        label: formatLabelToEnglish(obj.label),
+      }));
       setAiTargets(detected);
       if (response.data.warped_preview) {
         setWarpedPreview(response.data.warped_preview);
       }
       if (detected.length > 0) {
-        toast.success(`AI successfully detected ${detected.length} targets in frame!`);
+        if (activeTestScript && activeTestScript.length > 0) {
+          toast.success(`Detected ${detected.length} elements! Coordinates mapped to test script. Click "4. Execute CNC" to run!`, { id: 'ai-detect', duration: 5000 });
+        } else {
+          toast.success(`AI successfully detected ${detected.length} targets in frame!`, { id: 'ai-detect' });
+        }
       } else {
-        toast('No elements detected with current prompt. Adjust prompt or check camera focus.', { icon: 'ℹ️' });
+        toast('No elements detected with current prompt. Adjust prompt or check camera focus.', { id: 'ai-detect' });
       }
     } else {
-      toast.error(response.data.message || 'AI detection returned no targets');
+      toast.error(response.data.message || 'AI detection returned no targets', { id: 'ai-detect' });
     }
   });
 
@@ -499,7 +615,7 @@ const WebcamOcrPanel = ({
       const portsRes = await axios.get(`${API_BASE}/com/ports`);
       const availablePorts = portsRes.data?.ports || [];
       if (availablePorts.length === 0) {
-        toast('No physical COM ports detected. Running in simulation mode.', { icon: 'ℹ️' });
+        toast('No physical COM ports detected. Running in simulation mode.');
         return { connected: false, message: 'No COM ports detected' };
       }
 
@@ -656,7 +772,7 @@ const WebcamOcrPanel = ({
   // Automated Script Runner triggered from AI Test Studio
   const handleStopScriptRunner = () => {
     stopScriptRef.current = true;
-    toast('Execution halt requested!', { icon: '⏹️', id: 'auto-run' });
+    toast('Execution halt requested!', { id: 'auto-run' });
   };
 
   const handleStartScriptRunner = (scriptToRun = activeTestScript) => {
@@ -702,6 +818,7 @@ const WebcamOcrPanel = ({
       let detected = aiTargets.length > 0 ? aiTargets : [];
       if (detected.length === 0 && currentFrame) {
         toast.loading('Detecting screen elements & keypad targets...', { id: 'auto-run' });
+        setLoading('ai-detect');
         try {
           const detectPrompt = aiPrompt.trim() || 'all numeric keys 1, 2, 3, 4, and Enter OK buttons on ATM keypad';
           const detectRes = await axios.post(`${API_BASE}/webcam/ai-detect`, {
@@ -717,19 +834,24 @@ const WebcamOcrPanel = ({
           });
 
           if (detectRes.data?.success && detectRes.data?.objects) {
-            detected = detectRes.data.objects;
+            detected = detectRes.data.objects.map((obj) => ({
+              ...obj,
+              label: formatLabelToEnglish(obj.label),
+            }));
             setAiTargets(detected);
             if (detectRes.data.warped_preview) setWarpedPreview(detectRes.data.warped_preview);
           }
         } catch (detectErr) {
           console.warn('AI detect fallback:', detectErr);
+        } finally {
+          setLoading('');
         }
       }
 
       // 3. Sequentially execute each test step in script
       for (let i = 0; i < scriptToRun.length; i += 1) {
         if (stopScriptRef.current) {
-          toast('Execution stopped by user!', { icon: '⏹️', id: 'auto-run' });
+          toast('Execution stopped by user!', { id: 'auto-run' });
           break;
         }
 
@@ -745,28 +867,48 @@ const WebcamOcrPanel = ({
 
         toast.loading(`[Step ${i + 1}/${scriptToRun.length}] Processing: ${step.target}`, { id: 'auto-run' });
 
-        // Target search for ATM keys, buttons and inputs
-        const targetClean = (step.target || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        const stepVal = (step.value || '').toLowerCase().trim();
-        let matched = detected.find((d) => {
-          const dLabel = (d.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-          const dText = (d.text || '').toLowerCase().trim();
-          if (stepVal && (dLabel === stepVal || dLabel.includes(`key ${stepVal}`) || dText === stepVal)) {
-            return true;
+        // Match exact target element from detected camera objects
+        const matched = matchStepWithDetected(step, detected);
+
+        const targetCncX = (step.cnc_x !== undefined && step.cnc_x !== null) ? step.cnc_x : matched?.cnc_x;
+        const targetCncY = (step.cnc_y !== undefined && step.cnc_y !== null) ? step.cnc_y : matched?.cnc_y;
+        const targetPxX = (step.pixel_x !== undefined && step.pixel_x !== null) ? step.pixel_x : (matched?.pixel_x ?? matched?.center_x);
+        const targetPxY = (step.pixel_y !== undefined && step.pixel_y !== null) ? step.pixel_y : (matched?.pixel_y ?? matched?.center_y);
+
+        if (targetCncX !== undefined && targetCncY !== undefined && targetCncX !== null && targetCncY !== null) {
+          if (matched?.id) setSelectedTargetId(matched.id);
+          toast.loading(`[Step ${i + 1}/${scriptToRun.length}] Moving CNC to ${matched?.label || step.target} (X: ${targetCncX}, Y: ${targetCncY})...`, { id: 'auto-run' });
+
+          try {
+            await axios.post(`${API_BASE}/cnc/move-to-cnc-point`, {
+              target_x: targetCncX,
+              target_y: targetCncY,
+              press_a: step.action === 'CLICK' || step.action === 'TYPE' || autoPressA,
+            });
+
+            if (targetPxX !== undefined && targetPxY !== undefined) {
+              setLastTargetPoint({
+                x: targetPxX,
+                y: targetPxY,
+                cnc_x: targetCncX,
+                cnc_y: targetCncY,
+              });
+              setRedPenPos({
+                center_x: targetPxX,
+                center_y: targetPxY,
+                tip_x: targetPxX,
+                tip_y: targetPxY,
+                radius: 12,
+              });
+            }
+          } catch (mErr) {
+            console.warn('CNC move-to-cnc-point warning:', mErr);
+            toast.error(`CNC error at ${step.target}: ${mErr?.response?.data?.detail || mErr.message}`, { id: 'auto-run' });
           }
-          if (targetClean.includes('key 1') && (dLabel.includes('1') || dText.includes('1'))) return true;
-          if (targetClean.includes('key 2') && (dLabel.includes('2') || dText.includes('2'))) return true;
-          if (targetClean.includes('key 3') && (dLabel.includes('3') || dText.includes('3'))) return true;
-          if (targetClean.includes('key 4') && (dLabel.includes('4') || dText.includes('4'))) return true;
-          if ((targetClean.includes('enter') || targetClean.includes('ok')) && (dLabel.includes('enter') || dLabel.includes('ok') || dText.includes('enter') || dText.includes('ok'))) return true;
-          return dLabel.includes(targetClean) || targetClean.includes(dLabel);
-        });
-
-        if (!matched && detected[i]) {
-          matched = detected[i];
-        }
-
-        if (matched) {
+          await refreshCncStatus();
+          if (step.delay_ms) await new Promise((r) => setTimeout(r, step.delay_ms));
+          if (onStepUpdate) onStepUpdate(i, 'passed');
+        } else if (matched) {
           setSelectedTargetId(matched.id);
           const movePayload = {
             image_data: captureFrame(),
@@ -1086,10 +1228,10 @@ const WebcamOcrPanel = ({
             <span className="vision-pulse-dot" />
             COMPUTER VISION & AI ALIGNMENT
           </div>
-          <h2 className="section-title">CNC Automation Computer Vision</h2>
-          <p className="webcam-ocr-description">
+          <h2 className="section-title">Automation Computer Vision</h2>
+          {/* <p className="webcam-ocr-description">
             4-Point Perspective Transform &bull; AI Model Target Detection &bull; Arbitrary Coordinate Navigation
-          </p>
+          </p> */}
         </div>
         <div className="vision-header-actions">
           <span className={`webcam-ocr-status ${savedWorkArea ? 'webcam-ocr-status--matched' : ''}`}>
@@ -1194,6 +1336,25 @@ const WebcamOcrPanel = ({
                             Val: "{st.value}"
                           </div>
                         )}
+                        {/* Auto-mapped CNC Coordinates */}
+                        {(() => {
+                          const matchedTarget = (st.cnc_x !== undefined && st.cnc_y !== undefined)
+                            ? { label: st.target, cnc_x: st.cnc_x, cnc_y: st.cnc_y }
+                            : matchStepWithDetected(st, aiTargets);
+                          if (matchedTarget) {
+                            return (
+                              <div className="mt-1.5 px-1.5 py-0.5 bg-emerald-50 border border-emerald-300 rounded text-[9.5px] text-emerald-800 font-mono font-bold flex items-center justify-between" title={`Matched target ${matchedTarget.label} (CNC X: ${matchedTarget.cnc_x}, Y: ${matchedTarget.cnc_y})`}>
+                                <span>{matchedTarget.label !== st.target ? matchedTarget.label : 'CNC'}:</span>
+                                <span>X={matchedTarget.cnc_x}, Y={matchedTarget.cnc_y}</span>
+                              </div>
+                            );
+                          }
+                          return (
+                            <div className="mt-1.5 px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-[9px] text-slate-400 font-mono text-center">
+                              Awaiting detection...
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
@@ -1206,7 +1367,7 @@ const WebcamOcrPanel = ({
               <div className="py-2.5 px-3.5 bg-sky-50 border border-sky-200 rounded-xl mt-2">
                 <div className="flex items-center justify-between text-xs text-sky-900 font-semibold mb-1.5">
                   <span>
-                    ⚡ Executing step {currentExecutingStep.index + 1}/{currentExecutingStep.total}: [
+                    Executing step {currentExecutingStep.index + 1}/{currentExecutingStep.total}: [
                     {currentExecutingStep.action}] &rarr; {currentExecutingStep.target}
                     {currentExecutingStep.value ? ` (Value: "${currentExecutingStep.value}")` : ''}
                   </span>
@@ -1286,20 +1447,36 @@ const WebcamOcrPanel = ({
               type="button"
               onClick={handleRunAiDetection}
               disabled={busy}
-              className="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-white text-left transition-all group cursor-pointer"
+              className={`flex items-center justify-between p-3 rounded-xl border transition-all group cursor-pointer ${
+                loading === 'ai-detect'
+                  ? 'border-sky-400 bg-sky-50 shadow-md ring-2 ring-sky-300'
+                  : 'border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-white'
+              }`}
               title="Detect ATM keypad keys (1,2,3,4, Enter) and screen items"
             >
               <div className="flex items-center gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-[#01a9ac] text-white flex items-center justify-center font-bold text-xs">
-                  3
+                <div className={`w-7 h-7 rounded-lg text-white flex items-center justify-center font-bold text-xs ${loading === 'ai-detect' ? 'bg-sky-500' : 'bg-[#01a9ac]'}`}>
+                  {loading === 'ai-detect' ? (
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    '3'
+                  )}
                 </div>
                 <div>
-                  <div className="text-xs font-bold text-slate-800">Detect Elements</div>
-                  <div className="text-[10px] text-slate-500">Keypad 1,2,3,4 & Enter</div>
+                  <div className="text-xs font-bold text-slate-800">
+                    {loading === 'ai-detect' ? 'Detecting Targets...' : 'Detect Elements'}
+                  </div>
+                  <div className="text-[10px] text-slate-500">
+                    {loading === 'ai-detect' ? 'Analyzing camera frame...' : 'Keypad 1,2,3,4 & Enter'}
+                  </div>
                 </div>
               </div>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${aiTargets.length > 0 ? `${aiTargets.length} targets` : 'Not detected'}`}>
-                {aiTargets.length > 0 ? `${aiTargets.length} targets` : 'Not detected'}
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                loading === 'ai-detect'
+                  ? 'bg-sky-500 text-white animate-pulse'
+                  : (aiTargets.length > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600')
+              }`}>
+                {loading === 'ai-detect' ? 'Scanning...' : (aiTargets.length > 0 ? `${aiTargets.length} targets` : 'Not detected')}
               </span>
             </button>
 
@@ -1333,7 +1510,7 @@ const WebcamOcrPanel = ({
               >
                 <div className="flex items-center gap-2.5">
                   <div className="w-7 h-7 rounded-lg bg-white/20 text-white flex items-center justify-center font-bold text-xs">
-                    ⏹
+                    <span className="w-2.5 h-2.5 bg-white rounded-xs inline-block" />
                   </div>
                   <div>
                     <div className="text-xs font-extrabold text-white">Stop Execution</div>
@@ -1353,13 +1530,6 @@ const WebcamOcrPanel = ({
       <div className="vision-tabs-bar">
         <button
           type="button"
-          className={`vision-tab-btn ${activeTab === 'ai' ? 'vision-tab-btn--active' : ''}`}
-          onClick={() => setActiveTab('ai')}
-        >
-          AI Target Detection
-        </button>
-        <button
-          type="button"
           className={`vision-tab-btn ${activeTab === 'roi' ? 'vision-tab-btn--active' : ''}`}
           onClick={() => setActiveTab('roi')}
         >
@@ -1367,11 +1537,19 @@ const WebcamOcrPanel = ({
         </button>
         <button
           type="button"
+          className={`vision-tab-btn ${activeTab === 'ai' ? 'vision-tab-btn--active' : ''}`}
+          onClick={() => setActiveTab('ai')}
+        >
+          AI Target Detection
+        </button>
+        
+        {/* <button
+          type="button"
           className={`vision-tab-btn ${activeTab === 'grid' ? 'vision-tab-btn--active' : ''}`}
           onClick={() => setActiveTab('grid')}
         >
           Fixed Grid (NxM)
-        </button>
+        </button> */}
         <button
           type="button"
           className={`vision-tab-btn ${activeTab === 'ocr' ? 'vision-tab-btn--active' : ''}`}
@@ -1379,13 +1557,13 @@ const WebcamOcrPanel = ({
         >
           OCR Search
         </button>
-        <button
+        {/* <button
           type="button"
           className={`vision-tab-btn ${activeTab === 'redpen' ? 'vision-tab-btn--active' : ''}`}
           onClick={() => setActiveTab('redpen')}
         >
           Auto Calibration (Red Pen Step)
-        </button>
+        </button> */}
       </div>
 
       {/* Tab: Red Pen Marker & Step Auto-Calibration */}
@@ -1475,7 +1653,7 @@ const WebcamOcrPanel = ({
               className="webcam-ocr-button webcam-ocr-button--primary"
               style={{ padding: '0.65rem 1.4rem', fontSize: '0.85rem', fontWeight: 800 }}
             >
-              {isAutoMeasuring ? '⏳ AUTO MEASURING...' : '🚀 1-CLICK AUTO STEP & FRAME CALIBRATION'}
+              {isAutoMeasuring ? 'AUTO MEASURING...' : '1-CLICK AUTO STEP & FRAME CALIBRATION'}
             </button>
           </div>
 
@@ -1531,91 +1709,6 @@ const WebcamOcrPanel = ({
             </label>
           </div>
 
-          {/* Physical Keypad Calibration from User Reference */}
-          <div className="vision-input-row" style={{ marginTop: '0.4rem', background: '#0a233f', padding: '0.55rem 0.8rem', borderRadius: '8px', border: '1px solid #0284c7', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-            <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#38bdf8' }}>
-                🎯 CHUẨN TỌA ĐỘ BÀN PHÍM POS (KHỚP CHÍNH XÁC THEO PHÍM 1):
-              </span>
-              <span style={{ fontSize: '0.68rem', color: '#7dd3fc' }}>
-                Chuẩn: Phím 1 (50, -170) • Phím 2 (150, -170) • Phím 5 (150, -270)
-              </span>
-            </div>
-            <label style={{ flex: '1 1 120px' }} title="Tọa độ X của Phím 1 so với Origin (0,0)">
-              Phím 1 X (bước)
-              <input
-                type="number"
-                value={key1X}
-                onChange={(e) => setKey1X(Number(e.target.value))}
-                disabled={busy}
-              />
-            </label>
-            <label style={{ flex: '1 1 120px' }} title="Tọa độ Y của Phím 1 so với Origin (0,0)">
-              Phím 1 Y (bước)
-              <input
-                type="number"
-                value={key1Y}
-                onChange={(e) => setKey1Y(Number(e.target.value))}
-                disabled={busy}
-              />
-            </label>
-            <label style={{ flex: '1 1 120px' }} title="Khoảng cách giữa 2 cột phím theo trục X (số bước)">
-              Bước cột ngang ΔX
-              <input
-                type="number"
-                value={spacingX}
-                onChange={(e) => setSpacingX(Number(e.target.value))}
-                disabled={busy}
-              />
-            </label>
-            <label style={{ flex: '1 1 120px' }} title="Khoảng cách giữa 2 hàng phím theo trục Y (số âm khi lùi xuống)">
-              Bước hàng dọc ΔY
-              <input
-                type="number"
-                value={spacingY}
-                onChange={(e) => setSpacingY(Number(e.target.value))}
-                disabled={busy}
-              />
-            </label>
-          </div>
-
-          {/* <div className="vision-preset-chips" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '0.4rem 0' }}>
-            <span style={{ fontSize: '0.72rem', color: '#94a3b8', alignSelf: 'center', fontWeight: 700 }}>Suggestions:</span>
-            <button
-              type="button"
-              className="vision-coord-chip"
-              style={{ cursor: 'pointer', background: '#1e3a8a', border: '1px solid #3b82f6', color: '#93c5fd' }}
-              onClick={() => {
-                setAiPrompt('Facebook logo icon, email/phone input, password input, and login button');
-                setAiModel('gpt4o');
-              }}
-            >
-              📱 Facebook Login Form (Logo, Email, Password, Login)
-            </button>
-            <button
-              type="button"
-              className="vision-coord-chip"
-              style={{ cursor: 'pointer', background: '#064e3b', border: '1px solid #10b981', color: '#6ee7b7' }}
-              onClick={() => {
-                setAiPrompt('numeric keypad keys 1, 2, 3, 4, and Enter OK buttons on ATM interface');
-                setAiModel('gpt4o');
-              }}
-            >
-              🔘 ATM Keypad (1, 2, 3, 4 & Enter)
-            </button>
-            <button
-              type="button"
-              className="vision-coord-chip"
-              style={{ cursor: 'pointer', background: '#312e81', border: '1px solid #8b5cf6', color: '#c4b5fd' }}
-              onClick={() => {
-                setAiPrompt('objects, package, or device inside frame');
-                setAiModel('opencv');
-              }}
-            >
-              📦 Objects inside frame
-            </button>
-          </div> */}
-
           <div className="vision-actions-row">
             <button
               type="button"
@@ -1623,7 +1716,7 @@ const WebcamOcrPanel = ({
               disabled={busy}
               className="webcam-ocr-button webcam-ocr-button--primary"
             >
-              {loading === 'ai-detect' ? 'DETECTING TARGETS...' : '⚡ RUN AI DETECTION'}
+              {loading === 'ai-detect' ? 'DETECTING TARGETS...' : 'RUN AI DETECTION'}
             </button>
 
             {aiTargets.length > 0 && (
@@ -1652,59 +1745,6 @@ const WebcamOcrPanel = ({
       {/* Tab 2: 4-Point ROI Calibration Controls */}
       {activeTab === 'roi' && (
         <div className="vision-control-deck">
-          <div className="vision-input-row">
-            <label>
-              CNC Width (mm/steps)
-              <input
-                type="number"
-                value={cncWidth}
-                onChange={(e) => setCncWidth(Number(e.target.value) || 100)}
-                disabled={busy}
-              />
-            </label>
-            <label>
-              CNC Height (mm/steps)
-              <input
-                type="number"
-                value={cncHeight}
-                onChange={(e) => setCncHeight(Number(e.target.value) || 100)}
-                disabled={busy}
-              />
-            </label>
-            <label>
-              Camera Offset X
-              <input
-                type="number"
-                value={cameraOffsetX}
-                onChange={(e) => setCameraOffsetX(Number(e.target.value) || 0)}
-                disabled={busy}
-              />
-            </label>
-            <label>
-              Camera Offset Y
-              <input
-                type="number"
-                value={cameraOffsetY}
-                onChange={(e) => setCameraOffsetY(Number(e.target.value) || 0)}
-                disabled={busy}
-              />
-            </label>
-            <div className="vision-axis-toggles" style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-              <label className="vision-toggle-label" title="Invert X axis direction if moves left/right in reverse">
-                <input type="checkbox" checked={invertX} onChange={(e) => setInvertX(e.target.checked)} />
-                Invert X
-              </label>
-              <label className="vision-toggle-label" title="Invert Y axis direction if moves front/back in reverse">
-                <input type="checkbox" checked={invertY} onChange={(e) => setInvertY(e.target.checked)} />
-                Invert Y
-              </label>
-              <label className="vision-toggle-label" title="Swap X and Y axes if axes are transposed">
-                <input type="checkbox" checked={swapXY} onChange={(e) => setSwapXY(e.target.checked)} />
-                Swap X/Y
-              </label>
-            </div>
-          </div>
-
           <div className="vision-actions-row">
             <button
               type="button"
@@ -1847,6 +1887,25 @@ const WebcamOcrPanel = ({
           >
             <video ref={videoRef} autoPlay muted playsInline />
 
+            {/* AI Detection Loading HUD Scanning Overlay */}
+            {loading === 'ai-detect' && (
+              <div className="vision-scanning-overlay">
+                <div className="vision-laser-line" />
+                <div className="vision-scanning-hud">
+                  <div className="vision-scanner-spinner" />
+                  <div className="vision-scanning-text-box">
+                    <div className="vision-scanning-title">
+                      <span className="vision-dot-pulse" />
+                      AI DETECTING ELEMENTS...
+                    </div>
+                    <div className="vision-scanning-sub">
+                      Scanning camera frame &bull; Detecting numeric keypad &bull; Computing CNC coordinates
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* SVG Polygon Overlay connecting the 4 Corners & Target Boxes */}
             {(calibrationPoints.length >= 2 || savedWorkArea || aiTargets.length > 0) && (
               <svg className="vision-svg-overlay" viewBox={`0 0 ${frameWidth} ${frameHeight}`} preserveAspectRatio="none">
@@ -1888,7 +1947,7 @@ const WebcamOcrPanel = ({
                   onClick={(e) => {
                     e.stopPropagation();
                   }}
-                  title={`Corner ${index + 1} (${point.x}, ${point.y}) - Kéo để căn góc màn hình`}
+                  title={`Corner ${index + 1} (${point.x}, ${point.y}) - Drag to align screen corner`}
                 >
                   <span>{index + 1}</span>
                 </button>
@@ -1910,13 +1969,13 @@ const WebcamOcrPanel = ({
                     e.stopPropagation();
                     handleMoveToCncTarget(target);
                   }}
-                  title={`#${target.id} ${target.label} → CNC (${target.cnc_x}, ${target.cnc_y})`}
+                  title={`#${target.id} ${formatLabelToEnglish(target.label)} → CNC (${target.cnc_x}, ${target.cnc_y})`}
                 >
                   <div className="vision-ai-dot">
                     <span className="vision-ai-dot-num">{target.id}</span>
                   </div>
                   <div className="vision-ai-tag">
-                    <strong>#{target.id} {target.label}</strong>
+                    <strong>#{target.id} {formatLabelToEnglish(target.label)}</strong>
                     <span>X:{target.cnc_x} Y:{target.cnc_y}</span>
                   </div>
                 </button>
@@ -2026,7 +2085,7 @@ const WebcamOcrPanel = ({
             style={{ padding: '0.35rem 0.75rem', fontSize: '0.72rem', letterSpacing: '0.04em' }}
             title="Calibrate current physical toolhead position as Origin (0, 0)"
           >
-            🎯 SET ORIGIN (0,0) HERE
+            SET ORIGIN (0,0) HERE
           </button>
           <button
             type="button"
@@ -2036,7 +2095,7 @@ const WebcamOcrPanel = ({
             style={{ padding: '0.35rem 0.75rem', fontSize: '0.72rem', letterSpacing: '0.04em' }}
             title="Move CNC toolhead directly to Origin (0, 0)"
           >
-            🏠 GO TO (0,0)
+            GO TO (0,0)
           </button>
         </div>
 
@@ -2066,14 +2125,39 @@ const WebcamOcrPanel = ({
           <div className="vision-targets-tray__header">
             <h4>DETECTED SCREEN ELEMENTS ({aiTargets.length})</h4>
             <span className="vision-targets-tray__hint">Click on an element to move stylus toolhead directly to it</span>
+            {/* {onSendToAiStudio && (
+              <button
+                type="button"
+                onClick={() => onSendToAiStudio(aiTargets)}
+                className="webcam-ocr-button"
+                style={{
+                  marginLeft: 'auto',
+                  background: 'linear-gradient(135deg, #fe5d70 0%, #fe9365 100%)',
+                  color: '#ffffff',
+                  fontWeight: 700,
+                  padding: '0.35rem 0.85rem',
+                  fontSize: '0.75rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  boxShadow: '0 2px 8px rgba(254, 93, 112, 0.35)'
+                }}
+                title="Send all detected targets and CNC coordinates to AI Test Studio to generate automated script"
+              >
+                Send to AI Test Studio ({aiTargets.length})
+              </button>
+            )} */}
             <button
               type="button"
               onClick={() => setAiTargets([])}
               className="webcam-ocr-button webcam-ocr-button--quiet"
-              style={{ marginLeft: 'auto', padding: '0.2rem 0.6rem', fontSize: '0.72rem' }}
+              style={{ marginLeft: onSendToAiStudio ? '8px' : 'auto', padding: '0.2rem 0.6rem', fontSize: '0.72rem' }}
               title="Clear detected elements list"
             >
-              🗑️ Clear List
+              Clear List
             </button>
           </div>
           <div className="vision-targets-grid">
@@ -2085,15 +2169,15 @@ const WebcamOcrPanel = ({
               >
                 <div className="vision-target-card__header">
                   <span className="vision-target-card__id">#{target.id}</span>
-                  <span className="vision-target-card__label">{target.label}</span>
+                  <span className="vision-target-card__label">{formatLabelToEnglish(target.label)}</span>
                   <span className="vision-target-card__conf">{Math.round(target.confidence * 100)}%</span>
                 </div>
                 <div className="vision-target-card__coords" style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                   <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '6px', padding: '4px 8px', color: '#166534', fontSize: '0.85rem', fontWeight: 800 }}>
-                    🎯 CNC: X = {target.cnc_x} • Y = {target.cnc_y}
+                    CNC: X = {target.cnc_x} • Y = {target.cnc_y}
                   </div>
                   <div style={{ fontSize: '0.7rem', color: '#64748b', paddingLeft: '2px' }}>
-                    <span>Pixel camera:</span> ({target.pixel_x}, {target.pixel_y})
+                    <span>Camera Pixel:</span> ({target.pixel_x}, {target.pixel_y})
                   </div>
                 </div>
                 <div style={{ marginTop: '8px' }}>
@@ -2113,9 +2197,9 @@ const WebcamOcrPanel = ({
                       e.stopPropagation();
                       handleMoveToCncTarget(target);
                     }}
-                    title={`Di chuyển đầu kim CNC tới X=${target.cnc_x}, Y=${target.cnc_y} so với Origin (0,0)`}
+                    title={`Move CNC toolhead to X=${target.cnc_x}, Y=${target.cnc_y} relative to Origin (0,0)`}
                   >
-                    🎯 DI CHUYỂN TỚI (X: {target.cnc_x}, Y: {target.cnc_y})
+                    MOVE TO (X: {target.cnc_x}, Y: {target.cnc_y})
                   </button>
                 </div>
               </div>

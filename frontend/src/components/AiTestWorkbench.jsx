@@ -73,10 +73,103 @@ const ATM_MOCK_DATA = {
   ],
 };
 
-// Helper: Smart English Mock Generator
-function generateSmartMockScript(rawPrompt) {
+// Helper: Format labels to professional English names
+export function formatLabelToEnglish(label) {
+  if (!label) return 'Target Element';
+  const l = String(label).trim();
+  const lower = l.toLowerCase();
+
+  // Normalize numbers 0-9: e.g. "nut 1", "nút 1", "phím 1", "key 1", "button 1", "1"
+  const m = lower.match(/(?:nut|nút|phim|phím|key|button|số|so)?\s*([0-9])\b/);
+  if (m && !lower.includes('nhap') && !lower.includes('nhập') && !lower.includes('amount') && !lower.includes('tien') && !lower.includes('tiền')) {
+    return `Key ${m[1]}`;
+  }
+
+  if (lower.includes('thanh toan') || lower.includes('thanh toán') || lower.includes('pay')) return 'Pay Button';
+  if (lower.includes('huy') || lower.includes('hủy') || lower.includes('cancel')) return 'Cancel Button';
+  if (lower.includes('enter') || lower.includes('ok')) return 'Enter / OK Key';
+  if (lower.includes('so tien') || lower.includes('số tiền') || lower.includes('nhap') || lower.includes('nhập') || lower.includes('amount')) return 'Amount Input Field';
+  if (lower.includes('dang nhap') || lower.includes('đăng nhập') || lower.includes('login')) return 'Login Button';
+  if (lower.includes('mat khau') || lower.includes('mật khẩu') || lower.includes('password')) return 'Password Field';
+  if (lower.includes('email') || lower.includes('phone') || lower.includes('sdt')) return 'Email / Phone Field';
+
+  return l;
+}
+
+// Helper: Smart Mock Generator with Automatic Vision Element Mapping
+function generateSmartMockScript(rawPrompt, detectedTargets = []) {
   const text = (rawPrompt || '').trim();
   const lower = text.toLowerCase();
+
+  // 1. If vision targets exist, intelligently extract requested buttons/keys from prompt in order
+  if (detectedTargets && detectedTargets.length > 0) {
+    const matchedSteps = [];
+    // Split phrases by common Vietnamese & English delimiters: rồi, sau đó, tiếp theo, và, then, after, comma, dot, newline
+    const tokens = text
+      .split(/[,;\n.+]|\brồi\b|\bsau đó\b|\btiếp theo\b|\bva\b|\bvà\b|\bthen\b|\bafter\b|\bnext\b/i)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+
+    for (const token of tokens) {
+      const pClean = token.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+      let found = null;
+
+      // Match numbers: e.g. "nút 1", "phím 1", "key 1", "số 1", "1"
+      const numMatch = pClean.match(/(?:nut|phim|key|so|bam|nhan|cham)?\s*(\d+)/);
+      if (numMatch) {
+        const num = numMatch[1];
+        found = detectedTargets.find((t) => {
+          const tClean = (t.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          return tClean === `nut ${num}` || tClean === `key ${num}` || tClean.includes(` ${num}`) || tClean === num || t.text === num;
+        });
+      }
+
+      // Match special buttons: hủy, thanh toán, enter, ok, ô nhập số tiền...
+      if (!found) {
+        found = detectedTargets.find((t) => {
+          const tClean = (t.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          if ((pClean.includes('huy') || pClean.includes('cancel')) && tClean.includes('huy')) return true;
+          if ((pClean.includes('thanh toan') || pClean.includes('pay')) && tClean.includes('thanh toan')) return true;
+          if ((pClean.includes('nhap') || pClean.includes('tien')) && (tClean.includes('so tien') || tClean.includes('nhap'))) return true;
+          if ((pClean.includes('enter') || pClean.includes('ok')) && (tClean.includes('enter') || tClean.includes('ok'))) return true;
+          return pClean.includes(tClean) || tClean.includes(pClean);
+        });
+      }
+
+      if (found) {
+        const englishTarget = formatLabelToEnglish(found.label);
+        const alreadyLast = matchedSteps.length > 0 && matchedSteps[matchedSteps.length - 1].target === englishTarget;
+        if (!alreadyLast) {
+          matchedSteps.push({
+            id: matchedSteps.length + 1,
+            action: englishTarget.includes('Input') || found.label.toLowerCase().includes('nhập') || found.label.toLowerCase().includes('nhap') ? 'TYPE' : 'CLICK',
+            target: englishTarget,
+            value: englishTarget.includes('Input') || found.label.toLowerCase().includes('nhập') || found.label.toLowerCase().includes('nhap') ? '50000' : (numMatch ? numMatch[1] : ''),
+            delay_ms: 600,
+            description: `CNC stylus tap on ${englishTarget} (CNC X: ${found.cnc_x}, Y: ${found.cnc_y})`,
+            status: 'idle',
+            cnc_x: found.cnc_x,
+            cnc_y: found.cnc_y,
+            pixel_x: found.pixel_x,
+            pixel_y: found.pixel_y,
+          });
+        }
+      }
+    }
+
+    if (matchedSteps.length > 0) {
+      return {
+        test_name: `Test Scenario: ${matchedSteps.map((s) => s.target).join(' -> ')}`,
+        description: `Automated test generated from prompt: "${text}" mapped to physical camera vision targets`,
+        device: 'CNC Stylus Robot + Camera Vision',
+        engine: 'CNC Physical Absolute Coordinate Mapping',
+        preconditions: 'Target screen and keypad positioned in calibrated camera workspace',
+        expected: 'CNC stylus robot accurately moves and taps all targets sequentially',
+        steps: matchedSteps,
+      };
+    }
+  }
 
   // ATM PIN Scenario (Default & Primary match)
   if (
@@ -153,12 +246,61 @@ function generateSmartMockScript(rawPrompt) {
   };
 }
 
+// Helper to map detected CNC coordinates to script steps
+function attachCncCoordinates(steps, targets) {
+  if (!targets || targets.length === 0) return steps;
+  return steps.map((step) => {
+    if (step.cnc_x !== undefined && step.cnc_x !== null && step.cnc_y !== undefined && step.cnc_y !== null) {
+      return step;
+    }
+    const sTarget = (step.target || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const sVal = (step.value || '').toLowerCase().trim();
+
+    const matched = targets.find((t) => {
+      const tLabel = (t.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const tText = (t.text || '').toLowerCase().trim();
+      if (sVal && (tLabel === sVal || tLabel.includes(`nut ${sVal}`) || tLabel.includes(`key ${sVal}`) || tText === sVal)) return true;
+      if (sTarget.includes('key 1') || sTarget.includes('nut 1') || sTarget === '1') {
+        if (tLabel.includes('1') || tText.includes('1')) return true;
+      }
+      if (sTarget.includes('key 2') || sTarget.includes('nut 2') || sTarget === '2') {
+        if (tLabel.includes('2') || tText.includes('2')) return true;
+      }
+      if (sTarget.includes('key 3') || sTarget.includes('nut 3') || sTarget === '3') {
+        if (tLabel.includes('3') || tText.includes('3')) return true;
+      }
+      if (sTarget.includes('key 4') || sTarget.includes('nut 4') || sTarget === '4') {
+        if (tLabel.includes('4') || tText.includes('4')) return true;
+      }
+      if (sTarget.includes('enter') || sTarget.includes('ok') || sTarget.includes('thanh toan')) {
+        if (tLabel.includes('enter') || tLabel.includes('ok') || tLabel.includes('thanh toan')) return true;
+      }
+      return tLabel.includes(sTarget) || sTarget.includes(tLabel);
+    });
+
+    if (matched) {
+      return {
+        ...step,
+        cnc_x: matched.cnc_x,
+        cnc_y: matched.cnc_y,
+        pixel_x: matched.pixel_x,
+        pixel_y: matched.pixel_y,
+        description: step.description || `Move to ${matched.label} (CNC X: ${matched.cnc_x}, Y: ${matched.cnc_y})`,
+      };
+    }
+    return step;
+  });
+}
+
 const AiTestWorkbench = ({
   testScript = [],
   setTestScript,
+  aiTargets = [],
+  onImportFromVision = null,
   onExecuteTest,
   isExecuting = false,
   executionProgress = { current: 0, total: 0, stepName: '' },
+  switchToVisionTab,
 }) => {
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -171,25 +313,60 @@ const AiTestWorkbench = ({
   const [testName, setTestName] = useState(ATM_MOCK_DATA.test_name);
   const [testDesc, setTestDesc] = useState(ATM_MOCK_DATA.description);
 
+  // One-click import all detected vision elements with exact CNC coords
+  const handleImportDetectedTargets = () => {
+    if (onImportFromVision) {
+      onImportFromVision(aiTargets);
+      setHasGenerated(true);
+      return;
+    }
+    if (!aiTargets || aiTargets.length === 0) {
+      toast.error('No elements detected from vision yet. Please run Detect Elements in Vision tab first.');
+      return;
+    }
+    const converted = aiTargets.map((t, idx) => {
+      const engLabel = formatLabelToEnglish(t.label) || `Target #${t.id || idx + 1}`;
+      return {
+        id: idx + 1,
+        action: 'CLICK',
+        target: engLabel,
+        value: '',
+        delay_ms: 600,
+        description: `Tap ${engLabel} (CNC X: ${t.cnc_x}, Y: ${t.cnc_y})`,
+        status: 'idle',
+        cnc_x: t.cnc_x,
+        cnc_y: t.cnc_y,
+        pixel_x: t.pixel_x,
+        pixel_y: t.pixel_y,
+      };
+    });
+    setTestScript(converted);
+    setHasGenerated(true);
+    setTestName(`Test Scenario: ${aiTargets.length} Screen Targets`);
+    setTestDesc(`Auto-synchronized from camera vision with physical CNC coordinates`);
+    toast.success(`Imported ${converted.length} detected targets with CNC coordinates successfully.`);
+  };
+
   const handleGenerateRecommendation = async () => {
     if (!prompt.trim()) {
-      toast.error('Please enter a test scenario description!');
+      toast.error('Please enter a test scenario description.');
       return;
     }
 
     setIsGenerating(true);
-    const toastId = toast.loading('AI analyzing prompt & generating test recommendations...');
+    const toastId = toast.loading('AI analyzing prompt and generating test recommendations...');
 
     if (!useBackendAi) {
       setTimeout(() => {
-        const generated = generateSmartMockScript(prompt);
-        setMockMetadata(generated);
+        const generated = generateSmartMockScript(prompt, aiTargets);
+        const enrichedSteps = attachCncCoordinates(generated.steps, aiTargets);
+        setMockMetadata({ ...generated, steps: enrichedSteps });
         setTestName(generated.test_name);
         setTestDesc(generated.description);
-        setTestScript(generated.steps);
+        setTestScript(enrichedSteps);
         setHasGenerated(true);
         setIsGenerating(false);
-        toast.success(`✨ Generated ${generated.steps.length} test steps successfully!`, { id: toastId });
+        toast.success(`Generated ${enrichedSteps.length} test steps successfully.`, { id: toastId });
       }, 450);
       return;
     }
@@ -197,8 +374,10 @@ const AiTestWorkbench = ({
     try {
       const res = await axios.post(`${API_BASE}/ai/generate-testcases`, {
         prompt: prompt.trim(),
+        existing_elements: (aiTargets || []).map((t) => `${t.label} (CNC X:${t.cnc_x}, Y:${t.cnc_y})`),
       });
       if (res.data?.success && res.data?.steps) {
+        const enrichedSteps = attachCncCoordinates(res.data.steps, aiTargets);
         const genData = {
           test_name: res.data.test_name || 'Automated Test Scenario',
           description: res.data.description || prompt,
@@ -206,25 +385,26 @@ const AiTestWorkbench = ({
           engine: 'CNC Stylus + Vision AI',
           preconditions: 'Target app active in camera viewport',
           expected: 'Target UI state achieved with valid verification',
-          steps: res.data.steps,
+          steps: enrichedSteps,
         };
         setMockMetadata(genData);
         setTestName(genData.test_name);
         setTestDesc(genData.description);
-        setTestScript(res.data.steps);
+        setTestScript(enrichedSteps);
         setHasGenerated(true);
-        toast.success(`Generated ${res.data.steps.length} steps via OpenAI API!`, { id: toastId });
+        toast.success(`Generated ${enrichedSteps.length} steps via OpenAI API!`, { id: toastId });
       } else {
         throw new Error('Invalid response from AI server');
       }
     } catch (err) {
-      const generated = generateSmartMockScript(prompt);
-      setMockMetadata(generated);
+      const generated = generateSmartMockScript(prompt, aiTargets);
+      const enrichedSteps = attachCncCoordinates(generated.steps, aiTargets);
+      setMockMetadata({ ...generated, steps: enrichedSteps });
       setTestName(generated.test_name);
       setTestDesc(generated.description);
-      setTestScript(generated.steps);
+      setTestScript(enrichedSteps);
       setHasGenerated(true);
-      toast.success(`Switched to Mock Engine: generated ${generated.steps.length} steps!`, { id: toastId });
+      toast.success(`Switched to Mock Engine: generated ${enrichedSteps.length} steps!`, { id: toastId });
     } finally {
       setIsGenerating(false);
     }
@@ -301,14 +481,14 @@ const AiTestWorkbench = ({
 
   const handleExecuteClick = () => {
     if (!testScript || testScript.length === 0) {
-      toast.error('Test script is empty! Please generate or add steps first.');
+      toast.error('Test script is empty! Please generate an AI test script or add test steps first.');
       return;
     }
 
     const preparedScript = testScript.map((s) => ({ ...s, status: 'idle' }));
     setTestScript(preparedScript);
 
-    toast.success('Switching to Computer Vision & AI Alignment for automated execution!');
+    toast.success('Test script saved! Continue to Vision & Alignment to align frame, set origin, and detect targets.');
 
     if (onExecuteTest) {
       onExecuteTest(preparedScript);
@@ -328,10 +508,10 @@ const AiTestWorkbench = ({
         <div className="flex items-start justify-between pb-4 border-b border-slate-100 flex-wrap gap-3">
           <div>
             <div className="flex items-center gap-2.5">
-              <h2 className="text-lg font-extrabold text-slate-900 tracking-tight">AI Test Studio & Scenario Generator</h2>
-              <span className="bg-[#fe5d70]/10 text-[#fe5d70] text-xs font-bold px-2.5 py-0.5 rounded-full border border-[#fe5d70]/20">
+              <h2 className="text-lg font-extrabold text-slate-900 tracking-tight">AI Script Suggestion</h2>
+              {/* <span className="bg-[#fe5d70]/10 text-[#fe5d70] text-xs font-bold px-2.5 py-0.5 rounded-full border border-[#fe5d70]/20">
                 Mock Engine Ready
-              </span>
+              </span> */}
             </div>
             <p className="text-xs text-slate-500 mt-1">
               Ready to generate ATM security test. Click{' '}
@@ -339,7 +519,7 @@ const AiTestWorkbench = ({
             </p>
           </div>
 
-          <label className="flex items-center gap-1.5 text-xs text-slate-600 font-medium cursor-pointer select-none">
+          {/* <label className="flex items-center gap-1.5 text-xs text-slate-600 font-medium cursor-pointer select-none">
             <input
               type="checkbox"
               checked={useBackendAi}
@@ -347,7 +527,7 @@ const AiTestWorkbench = ({
               className="rounded text-[#fe5d70] focus:ring-[#fe5d70]"
             />
             <span>Use OpenAI Cloud API</span>
-          </label>
+          </label> */}
         </div>
 
         {/* Prompt Input Textarea */}
@@ -370,9 +550,9 @@ const AiTestWorkbench = ({
           />
 
           <div className="flex items-center justify-between flex-wrap gap-3 pt-1">
-            <span className="text-xs text-slate-500">
+            {/* <span className="text-xs text-slate-500">
               💡 Automated entity extractor maps PIN keys (1, 2, 3, 4), Enter/OK key, and banking menu verification.
-            </span>
+            </span> */}
 
             {/* THE REQUESTED BUTTON: GENERATE AI RECOMMENDATION */}
             <button
@@ -410,53 +590,7 @@ const AiTestWorkbench = ({
       {/* ===================================================================
           CARD 2: AI RECOMMENDATION & MOCK DATA OVERVIEW (ENGLISH SPECIFICATIONS)
           =================================================================== */}
-      {hasGenerated && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs relative overflow-hidden">
-          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-[#01a9ac] to-[#01dbdf]" />
-
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100 flex-wrap gap-2">
-            <div>
-              <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#01a9ac]">Mock Data Specification</span>
-              <h3 className="text-base font-extrabold text-slate-900">{mockMetadata.test_name || testName}</h3>
-            </div>
-            <span className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold rounded-full">
-              AI Confidence: 98.6%
-            </span>
-          </div>
-
-          {/* Hardcoded / Dynamic Mock Data Grid in English */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-4 text-xs">
-            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200">
-              <span className="text-slate-400 font-bold uppercase tracking-wider block text-[10px]">Target Platform</span>
-              <span className="text-slate-800 font-bold mt-1 block">{mockMetadata.device || 'Mobile Smartphone Rig'}</span>
-              <span className="text-slate-500 text-[11px] mt-0.5 block">Physical capacitive screen</span>
-            </div>
-
-            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200">
-              <span className="text-slate-400 font-bold uppercase tracking-wider block text-[10px]">Execution Mechanism</span>
-              <span className="text-slate-800 font-bold mt-1 block">{mockMetadata.engine || 'CNC Stylus + GPT-4o Vision'}</span>
-              <span className="text-slate-500 text-[11px] mt-0.5 block">Automated pixel mapping</span>
-            </div>
-
-            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200">
-              <span className="text-slate-400 font-bold uppercase tracking-wider block text-[10px]">Est. Execution Time</span>
-              <span className="text-slate-800 font-bold mt-1 block">~{totalEstDuration}s (Estimated)</span>
-              <span className="text-slate-500 text-[11px] mt-0.5 block">{testScript.length} total sequential steps</span>
-            </div>
-
-            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200">
-              <span className="text-slate-400 font-bold uppercase tracking-wider block text-[10px]">Target Preconditions</span>
-              <span className="text-slate-800 font-bold mt-1 block">Calibrated 4-Point ROI</span>
-              <span className="text-slate-500 text-[11px] mt-0.5 block">Device screen unlocked</span>
-            </div>
-          </div>
-
-          <div className="mt-3.5 p-3 bg-blue-50/60 rounded-xl border border-blue-100 text-xs text-blue-900 flex items-start gap-2">
-            <span className="font-bold shrink-0 text-blue-600">Expected Outcome:</span>
-            <span>{mockMetadata.expected || 'All interaction steps and verification gates pass successfully on the physical CNC test rig.'}</span>
-          </div>
-        </div>
-      )}
+    
 
       {/* ===================================================================
           CARD 3: EDITABLE TEST SCRIPT TABLE
@@ -484,11 +618,22 @@ const AiTestWorkbench = ({
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
+              {aiTargets && aiTargets.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleImportDetectedTargets}
+                  disabled={isExecuting}
+                  className="px-3.5 py-2 bg-gradient-to-r from-[#fe5d70] to-[#fe9365] hover:shadow-md text-white text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  title="Load all detected screen elements and CNC coordinates into script table"
+                >
+                  <span>Import from Vision ({aiTargets.length})</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleAddStep}
                 disabled={isExecuting}
-                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors"
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors cursor-pointer"
               >
                 + Add Step
               </button>
@@ -496,7 +641,7 @@ const AiTestWorkbench = ({
                 type="button"
                 onClick={handleResetStatuses}
                 disabled={isExecuting}
-                className="px-3.5 py-2 border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-semibold rounded-lg transition-colors"
+                className="px-3.5 py-2 border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
               >
                 Reset Statuses
               </button>
@@ -504,20 +649,21 @@ const AiTestWorkbench = ({
                 type="button"
                 onClick={handleClearAll}
                 disabled={isExecuting || testScript.length === 0}
-                className="px-3.5 py-2 border border-red-200 hover:bg-red-50 text-red-600 text-xs font-semibold rounded-lg transition-colors"
+                className="px-3.5 py-2 border border-red-200 hover:bg-red-50 text-red-600 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
               >
                 Clear All
               </button>
 
-              {/* Execute Button */}
+              {/* Continue to Vision Button
               <button
                 type="button"
                 onClick={handleExecuteClick}
                 disabled={isExecuting || testScript.length === 0}
-                className="px-5 py-2 bg-gradient-to-r from-[#0ac282] to-[#0df3a3] hover:shadow-md hover:-translate-y-0.5 disabled:opacity-50 text-white text-xs font-extrabold rounded-lg transition-all shadow-xs"
+                className="px-5 py-2 bg-gradient-to-r from-[#01a9ac] to-[#0ac282] hover:shadow-md hover:-translate-y-0.5 disabled:opacity-50 text-white text-xs font-extrabold rounded-lg transition-all shadow-xs cursor-pointer flex items-center gap-1.5"
+                title="Proceed to Vision & Alignment tab to calibrate frame, set origin, and detect elements before executing"
               >
-                {isExecuting ? 'Executing...' : 'Execute on Vision & CNC'}
-              </button>
+                <span>Continue to Vision & Alignment &rarr;</span>
+              </button> */}
             </div>
           </div>
 
@@ -553,7 +699,8 @@ const AiTestWorkbench = ({
                     <th className="py-3 px-3 w-12 text-center">#</th>
                     <th className="py-3 px-3 w-32">Action</th>
                     <th className="py-3 px-3">UI Target Element</th>
-                    <th className="py-3 px-3 w-48">Input Value</th>
+                    <th className="py-3 px-3 w-40 text-center">CNC Coords (X, Y)</th>
+                    <th className="py-3 px-3 w-44">Input Value</th>
                     <th className="py-3 px-3 w-24 text-center">Delay (ms)</th>
                     <th className="py-3 px-3 w-32 text-center">Status</th>
                     <th className="py-3 px-3 w-36 text-center">Operations</th>
@@ -601,6 +748,34 @@ const AiTestWorkbench = ({
                             disabled={isExecuting}
                             className="w-full bg-white border border-slate-200 rounded-md py-1.5 px-2.5 text-xs text-slate-800 outline-none focus:border-[#fe5d70] font-medium"
                           />
+                        </td>
+
+                        {/* CNC Coordinates (X, Y) */}
+                        <td className="py-2.5 px-3 text-center">
+                          {step.cnc_x !== undefined && step.cnc_y !== undefined && step.cnc_x !== null && step.cnc_y !== null ? (
+                            <div className="inline-flex items-center gap-1 bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs px-2 py-0.5 rounded-lg font-mono font-bold">
+                              <span className="text-[10px] text-emerald-600">X:</span>
+                              <input
+                                type="number"
+                                value={step.cnc_x}
+                                onChange={(e) => handleUpdateStep(idx, 'cnc_x', e.target.value === '' ? null : Number(e.target.value))}
+                                disabled={isExecuting}
+                                className="w-12 bg-white border border-emerald-300 rounded px-1 py-0.5 text-center text-xs text-emerald-900 font-bold outline-none"
+                              />
+                              <span className="text-[10px] text-emerald-600">Y:</span>
+                              <input
+                                type="number"
+                                value={step.cnc_y}
+                                onChange={(e) => handleUpdateStep(idx, 'cnc_y', e.target.value === '' ? null : Number(e.target.value))}
+                                disabled={isExecuting}
+                                className="w-12 bg-white border border-emerald-300 rounded px-1 py-0.5 text-center text-xs text-emerald-900 font-bold outline-none"
+                              />
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 font-mono">
+                              Auto Vision Match
+                            </span>
+                          )}
                         </td>
 
                         {/* Input Value */}
@@ -703,9 +878,10 @@ const AiTestWorkbench = ({
               type="button"
               onClick={handleExecuteClick}
               disabled={isExecuting || testScript.length === 0}
-              className="px-5 py-2.5 bg-gradient-to-r from-[#0ac282] to-[#0df3a3] hover:shadow-md hover:-translate-y-0.5 disabled:opacity-50 text-white font-extrabold rounded-xl transition-all shadow-xs"
+              className="px-5 py-2.5 bg-gradient-to-r from-[#01a9ac] to-[#0ac282] hover:shadow-md hover:-translate-y-0.5 disabled:opacity-50 text-white font-extrabold rounded-xl transition-all shadow-xs cursor-pointer flex items-center gap-2"
+              title="Proceed to Vision & Alignment tab to calibrate frame, set origin, and detect elements before executing"
             >
-              Execute on Vision & CNC
+              <span>Continue to Vision & Alignment &rarr;</span>
             </button>
           </div>
         </div>

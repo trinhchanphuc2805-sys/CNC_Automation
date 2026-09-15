@@ -12,6 +12,7 @@ function App() {
 
   // Shared test script state
   const [testScript, setTestScript] = useState([]);
+  const [aiTargets, setAiTargets] = useState([]);
   const [isExecutingScript, setIsExecutingScript] = useState(false);
   const [executionProgress, setExecutionProgress] = useState({
     current: 0,
@@ -43,6 +44,29 @@ function App() {
     setIsExecutingScript(false);
   };
 
+  // Transfer detected vision elements to AI Test Studio
+  const handleSendTargetsToStudio = (targetsToSend = aiTargets) => {
+    const list = targetsToSend.length > 0 ? targetsToSend : aiTargets;
+    if (!list || list.length === 0) {
+      return;
+    }
+    const convertedSteps = list.map((target, idx) => ({
+      id: idx + 1,
+      action: 'CLICK',
+      target: target.label || `Target #${target.id || idx + 1}`,
+      value: '',
+      delay_ms: 600,
+      description: `Tap ${target.label} (CNC X: ${target.cnc_x}, Y: ${target.cnc_y})`,
+      status: 'idle',
+      cnc_x: target.cnc_x,
+      cnc_y: target.cnc_y,
+      pixel_x: target.pixel_x,
+      pixel_y: target.pixel_y,
+    }));
+    setTestScript(convertedSteps);
+    setActiveTab('ai-studio');
+  };
+
   // Called when user clicks Execute in Tab 1 (AI Test Studio)
   const handleExecuteFromAiStudio = (scriptToExecute) => {
     const pendingScript = scriptToExecute.map((s) => ({
@@ -50,13 +74,13 @@ function App() {
       status: 'pending',
     }));
     setTestScript(pendingScript);
-    // Switch to Tab 2: Computer Vision & AI Alignment
+    // Switch to Tab 2: Computer Vision & AI Alignment (wait for user frame setup, zero origin and detect before executing)
     setActiveTab('vision-alignment');
     setIsExecutingScript(false);
     setExecutionProgress({
       current: 0,
       total: scriptToExecute.length,
-      stepName: 'Pending Execution',
+      stepName: 'Waiting for Setup & Vision Detection',
     });
   };
 
@@ -68,6 +92,7 @@ function App() {
         position="top-right"
         toastOptions={{
           duration: 3500,
+          icon: null,
           style: {
             borderRadius: '10px',
             fontWeight: '600',
@@ -79,10 +104,15 @@ function App() {
             border: '1px solid #e2e8f0',
           },
           success: {
+            icon: null,
             style: { background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0' },
           },
           error: {
+            icon: null,
             style: { background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' },
+          },
+          loading: {
+            icon: null,
           },
         }}
       />
@@ -117,6 +147,8 @@ function App() {
             <AiTestWorkbench
               testScript={testScript}
               setTestScript={setTestScript}
+              aiTargets={aiTargets}
+              onImportFromVision={handleSendTargetsToStudio}
               onExecuteTest={handleExecuteFromAiStudio}
               isExecuting={isExecutingScript}
               executionProgress={executionProgress}
@@ -128,6 +160,9 @@ function App() {
           <div style={{ display: activeTab === 'vision-alignment' ? 'block' : 'none' }}>
             <WebcamOcrPanel
               activeTestScript={testScript}
+              aiTargets={aiTargets}
+              setAiTargets={setAiTargets}
+              onSendToAiStudio={handleSendTargetsToStudio}
               onStepUpdate={handleStepUpdate}
               onCompleteExecution={handleCompleteExecution}
               isExecutingScript={isExecutingScript}

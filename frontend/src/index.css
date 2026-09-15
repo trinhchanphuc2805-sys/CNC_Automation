@@ -348,6 +348,109 @@ body {
   box-shadow: 0 0 20px rgba(250, 204, 21, 0.9);
 }
 
+/* ---------------- AI Detection Scanning Overlay ---------------- */
+.vision-scanning-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 25, 47, 0.72);
+  backdrop-filter: blur(3px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 45;
+  pointer-events: none;
+  animation: visionOverlayFadeIn 0.25s ease-out;
+}
+
+@keyframes visionOverlayFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.vision-laser-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent 0%, #00e5ff 25%, #38bdf8 50%, #00e5ff 75%, transparent 100%);
+  box-shadow: 0 0 15px #00e5ff, 0 0 30px #0284c7;
+  animation: visionScanLaser 2s ease-in-out infinite alternate;
+}
+
+@keyframes visionScanLaser {
+  0% { top: 6%; opacity: 0.85; }
+  50% { opacity: 1; }
+  100% { top: 94%; opacity: 0.85; }
+}
+
+.vision-scanning-hud {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1.5px solid rgba(56, 189, 248, 0.7);
+  padding: 22px 32px;
+  border-radius: 16px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 30px rgba(56, 189, 248, 0.25);
+  text-align: center;
+  max-width: 90%;
+  animation: visionHudPop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes visionHudPop {
+  0% { transform: scale(0.92); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.vision-scanner-spinner {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 3.5px solid rgba(56, 189, 248, 0.2);
+  border-top-color: #38bdf8;
+  border-right-color: #00e5ff;
+  animation: visionSpin 0.85s linear infinite;
+}
+
+@keyframes visionSpin {
+  to { transform: rotate(360deg); }
+}
+
+.vision-scanning-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #f8fafc;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vision-dot-pulse {
+  width: 10px;
+  height: 10px;
+  background: #38bdf8;
+  border-radius: 50%;
+  box-shadow: 0 0 12px #38bdf8;
+  animation: visionPulse 1s ease-in-out infinite alternate;
+}
+
+@keyframes visionPulse {
+  from { transform: scale(0.75); opacity: 0.5; }
+  to { transform: scale(1.35); opacity: 1; }
+}
+
+.vision-scanning-sub {
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
 /* ---------------- Vision Studio Styles ---------------- */
 .vision-studio-card {
   /* background: #0b1f33; */
