@@ -149,7 +149,7 @@ const WebcamOcrPanel = ({
   const [currentCncPos, setCurrentCncPos] = useState({ x: 0, y: 0, a: 0 });
 
   // AI Target Detection states
-  const [aiPrompt, setAiPrompt] = useState('all buttons, keys, or targets');
+  const [aiPrompt, setAiPrompt] = useState('Every individual key on the laptop keyboard');
   const [aiModel, setAiModel] = useState('gpt4o');
   const [localAiTargets, setLocalAiTargets] = useState([]);
   const aiTargets = (externalAiTargets && externalAiTargets.length > 0) ? externalAiTargets : localAiTargets;
@@ -166,7 +166,7 @@ const WebcamOcrPanel = ({
 
   // Red Pen Marker & Step Auto-Calibration states
   const [redPenPos, setRedPenPos] = useState(null);
-  const [testJogSteps, setTestJogSteps] = useState(500);
+  const [testJogSteps, setTestJogSteps] = useState(100);
   const [stepsPerPixelX, setStepsPerPixelX] = useState(5.0);
   const [stepsPerPixelY, setStepsPerPixelY] = useState(5.0);
   const [measuredFrame, setMeasuredFrame] = useState(null);
@@ -227,13 +227,13 @@ const WebcamOcrPanel = ({
           a: res.data.current_a ?? 0,
         });
       }
-    } catch {}
+    } catch { }
   };
 
   useEffect(() => {
     axios.get(`${API_BASE}/webcam/ocr-engine`)
       .then((response) => setEngine(response.data.engine))
-      .catch(() => {});
+      .catch(() => { });
     refreshCncStatus();
     const timer = setInterval(refreshCncStatus, 2500);
     return () => clearInterval(timer);
@@ -389,7 +389,7 @@ const WebcamOcrPanel = ({
           if (warpRes.data?.warped_preview) {
             setWarpedPreview(warpRes.data.warped_preview);
           }
-        } catch (_) {}
+        } catch (_) { }
       } catch (saveErr) {
         console.warn('Auto-save calibration warning:', saveErr);
       }
@@ -1194,6 +1194,81 @@ const WebcamOcrPanel = ({
     }
   };
 
+  const handleRunAutoGridCalibration = async () => {
+    setIsAutoMeasuring(true);
+    setAutoMeasureStatus('Starting 9-point grid calibration...');
+    try {
+      // 3x3 Grid
+      const pointsPx = [];
+      const pointsCnc = [];
+
+      const startX = currentCncPos.x || 0;
+      const startY = currentCncPos.y || 0;
+      const stepX = testJogSteps || 500;
+      const stepY = testJogSteps || 500;
+
+      for (let ix = 0; ix < 3; ix++) {
+        for (let iy = 0; iy < 3; iy++) {
+          const targetX = startX + ix * stepX;
+          const targetY = startY + iy * stepY;
+
+          setAutoMeasureStatus(`Moving to point [${ix + 1},${iy + 1}] (CNC X: ${targetX}, Y: ${targetY})...`);
+
+          await axios.post(`${API_BASE}/cnc/move-to-cnc-point`, {
+            target_x: targetX,
+            target_y: targetY,
+            press_a: false
+          });
+
+          await new Promise((r) => setTimeout(r, 1200));
+
+          const f = captureFrame();
+          if (!f) throw new Error("Could not capture frame");
+
+          const res = await axios.post(`${API_BASE}/webcam/detect-red-pen`, { image_data: f });
+          if (!res.data?.success || !res.data?.pen) {
+            throw new Error(`Could not find red stylus at point [${ix + 1},${iy + 1}].`);
+          }
+
+          const pen = res.data.pen;
+          const pxX = pen.tip_x ?? pen.center_x;
+          const pxY = pen.tip_y ?? pen.center_y;
+
+          pointsPx.push([pxX, pxY]);
+          pointsCnc.push([targetX, targetY]);
+
+          setRedPenPos(pen);
+        }
+      }
+
+      setAutoMeasureStatus('All 9 points collected. Training spatial model...');
+
+      const trainRes = await axios.post(`${API_BASE}/webcam/calibrate/spatial/train`, {
+        points_px: pointsPx,
+        points_cnc: pointsCnc
+      });
+
+      if (trainRes.data.success) {
+        toast.success('Grid spatial calibration completed and model trained!', { duration: 5000 });
+      } else {
+        toast.error('Failed to train spatial mapping model');
+      }
+
+      setAutoMeasureStatus('Returning to origin...');
+      await axios.post(`${API_BASE}/cnc/go-to-origin`);
+
+      setAutoMeasureStatus('Grid Calibration complete!');
+    } catch (err) {
+      setAutoMeasureStatus(`Grid Calibration Error: ${err.message}`);
+      toast.error(err.response?.data?.detail || err.message);
+    } finally {
+      setIsAutoMeasuring(false);
+      refreshCncStatus();
+    }
+  };
+
+
+
   // 6. OCR Handlers
   const handleOcr = () => runAction('ocr', async () => {
     if (!pattern.trim()) {
@@ -1294,15 +1369,14 @@ const WebcamOcrPanel = ({
                   return (
                     <div
                       key={`step-card-${st.id || sIdx}`}
-                      className={`p-2.5 rounded-xl border transition-all text-xs flex flex-col justify-between ${
-                        isRun
-                          ? 'bg-sky-50/80 border-sky-300 shadow-xs ring-2 ring-sky-400/30'
-                          : isPass
+                      className={`p-2.5 rounded-xl border transition-all text-xs flex flex-col justify-between ${isRun
+                        ? 'bg-sky-50/80 border-sky-300 shadow-xs ring-2 ring-sky-400/30'
+                        : isPass
                           ? 'bg-emerald-50/70 border-emerald-300 text-emerald-950'
                           : isFail
-                          ? 'bg-red-50 border-red-300 text-red-900'
-                          : 'bg-slate-50 border-slate-200 text-slate-700'
-                      }`}
+                            ? 'bg-red-50 border-red-300 text-red-900'
+                            : 'bg-slate-50 border-slate-200 text-slate-700'
+                        }`}
                     >
                       <div>
                         <div className="flex items-center justify-between gap-1 mb-1">
@@ -1447,11 +1521,10 @@ const WebcamOcrPanel = ({
               type="button"
               onClick={handleRunAiDetection}
               disabled={busy}
-              className={`flex items-center justify-between p-3 rounded-xl border transition-all group cursor-pointer ${
-                loading === 'ai-detect'
-                  ? 'border-sky-400 bg-sky-50 shadow-md ring-2 ring-sky-300'
-                  : 'border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-white'
-              }`}
+              className={`flex items-center justify-between p-3 rounded-xl border transition-all group cursor-pointer ${loading === 'ai-detect'
+                ? 'border-sky-400 bg-sky-50 shadow-md ring-2 ring-sky-300'
+                : 'border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-white'
+                }`}
               title="Detect ATM keypad keys (1,2,3,4, Enter) and screen items"
             >
               <div className="flex items-center gap-2.5">
@@ -1471,11 +1544,10 @@ const WebcamOcrPanel = ({
                   </div>
                 </div>
               </div>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                loading === 'ai-detect'
-                  ? 'bg-sky-500 text-white animate-pulse'
-                  : (aiTargets.length > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600')
-              }`}>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${loading === 'ai-detect'
+                ? 'bg-sky-500 text-white animate-pulse'
+                : (aiTargets.length > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600')
+                }`}>
                 {loading === 'ai-detect' ? 'Scanning...' : (aiTargets.length > 0 ? `${aiTargets.length} targets` : 'Not detected')}
               </span>
             </button>
@@ -1537,12 +1609,19 @@ const WebcamOcrPanel = ({
         </button>
         <button
           type="button"
+          className={`vision-tab-btn ${activeTab === 'spatial' ? 'vision-tab-btn--active' : ''}`}
+          onClick={() => setActiveTab('spatial')}
+        >
+          High-Precision Grid Map
+        </button>
+        <button
+          type="button"
           className={`vision-tab-btn ${activeTab === 'ai' ? 'vision-tab-btn--active' : ''}`}
           onClick={() => setActiveTab('ai')}
         >
           AI Target Detection
         </button>
-        
+
         {/* <button
           type="button"
           className={`vision-tab-btn ${activeTab === 'grid' ? 'vision-tab-btn--active' : ''}`}
@@ -1703,7 +1782,8 @@ const WebcamOcrPanel = ({
             <label>
               AI Model
               <select value={aiModel} onChange={(e) => setAiModel(e.target.value)} disabled={busy}>
-                <option value="gpt4o">OpenAI GPT-4o-mini (Smart Visual AI)</option>
+                <option value="gpt4o">OpenAI GPT-4o (High Precision Vision)</option>
+                <option value="gpt4o-mini">OpenAI GPT-4o-mini (Fast & Cheap)</option>
                 <option value="opencv">OpenCV Contours & Shapes (Offline 0ms)</option>
               </select>
             </label>
@@ -1802,6 +1882,67 @@ const WebcamOcrPanel = ({
               RESET
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Tab 2.5: Spatial Calibration Controls */}
+      {activeTab === 'spatial' && (
+        <div className="vision-control-deck">
+          <div className="vision-actions-row">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const res = await axios.get(`${API_BASE}/webcam/calibrate/spatial/status`);
+                  toast.success(`Grid mapping is calibrated: ${res.data.calibrated ? 'YES' : 'NO'}`);
+                } catch (e) {
+                  toast.error('Failed to get status');
+                }
+              }}
+              className="webcam-ocr-button webcam-ocr-button--quiet"
+            >
+              CHECK GRID CALIBRATION STATUS
+            </button>
+            <button
+              type="button"
+              onClick={handleRunAutoGridCalibration}
+              disabled={busy || isAutoMeasuring}
+              className="webcam-ocr-button webcam-ocr-button--primary"
+            >
+              RUN AUTO-GRID CALIBRATION
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                toast.success('Please place a checkerboard on the table to calibrate lens distortion.');
+                // Future: Hook to /calibrate/intrinsic
+              }}
+              disabled={busy}
+              className="webcam-ocr-button webcam-ocr-button--capture"
+            >
+              CALIBRATE LENS (INTRINSIC)
+            </button>
+          </div>
+
+          <div className="vision-input-row" style={{ marginTop: '0.5rem' }}>
+            <label>
+              Grid Step Spacing (X/Y steps)
+              <input
+                type="number"
+                value={testJogSteps}
+                onChange={(e) => setTestJogSteps(Math.max(50, Number(e.target.value) || 500))}
+                disabled={busy || isAutoMeasuring}
+                title="Distance between grid points in CNC steps (e.g. 500)"
+              />
+            </label>
+          </div>
+
+          {autoMeasureStatus && activeTab === 'spatial' && (
+            <div className="vision-automeasure-status">
+              <span className="vision-pulse-dot" style={{ background: isAutoMeasuring ? '#38bdf8' : '#10b981' }} />
+              <span>{autoMeasureStatus}</span>
+            </div>
+          )}
         </div>
       )}
 

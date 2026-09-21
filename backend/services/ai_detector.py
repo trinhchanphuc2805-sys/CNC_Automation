@@ -310,84 +310,75 @@ class AIDetectorService:
             "cnc_bounds": {"x1": x1, "y1": y1, "span_x": span_x, "span_y": span_y},
         }
 
-    def _detect_openai_vision(self, image: np.ndarray, prompt: str, is_cropped_screen: bool = False) -> List[Dict[str, Any]]:
+    def _detect_openai_vision(self, image: np.ndarray, prompt: str, is_cropped_screen: bool = False, model_type: str = "gpt-4o") -> List[Dict[str, Any]]:
         client = get_openai_client()
         h, w = image.shape[:2]
         base64_img = encode_image_to_base64(image)
         raw_b64 = base64_img.split(",", 1)[1] if "," in base64_img else base64_img
 
+        # Use the requested model type, map 'gpt4o' back to standard openai model string
+        ai_model = "gpt-4o" if "gpt4o" in model_type.lower() and "mini" not in model_type.lower() else "gpt-4o-mini"
+
         if is_cropped_screen:
             system_instruction = (
-                "You are an industrial precision computer vision and UI touch localization assistant for a robotic CNC stylus tester.\n"
-                "The image provided is a tightly CROPPED TOUCHSCREEN display of an electronic device (such as a POS payment terminal or smartphone).\n"
+                "You are an industrial precision computer vision and UI touch localization assistant.\n"
+                "The image provided is a tightly CROPPED TOUCHSCREEN display of an electronic device.\n"
                 "The entire image corresponds strictly to the active touchscreen display area.\n\n"
                 "UI ELEMENTS TO LOCATE:\n"
-                "1. If an amount input field or display header is visible (e.g. '$0.00', 'Purchase', header text), detect it.\n"
-                "2. Detect numeric keys: 1, 2, 3, 4, 5, 6, 7, 8, 9, 0 strictly inside the keypad grid.\n"
-                "3. Detect action buttons (e.g. Cancel Button, Pay Button, Enter / OK Key, Back).\n"
+                "1. Detect ALL interactive elements, buttons, keys, icons, form fields, or texts that match the user's prompt.\n"
+                "2. There could be any type of UI element (e.g. app icons, toggles, generic buttons, keypad keys).\n"
                 f"User target prompt: '{prompt}'.\n\n"
                 "Return JSON ONLY with this exact schema:\n"
                 "{\n"
                 '  "targets": [\n'
                 '    {\n'
-                '      "label": "Professional English name (e.g. Amount Input Field, Key 1, Key 2, Key 3, Key 4, Key 5, Key 6, Key 7, Key 8, Key 9, Key 0, Cancel Button, Pay Button, Enter / OK Key)",\n'
+                '      "label": "Specific Element Name (e.g. Settings Icon, Submit Button, Search Bar, Key A, Toggle)",\n'
                 '      "confidence": 0.98,\n'
-                '      "center_x_norm": 0.50,\n'
-                '      "center_y_norm": 0.55,\n'
-                '      "width_norm": 0.25,\n'
-                '      "height_norm": 0.12\n'
+                '      "ymin": 450,\n'
+                '      "xmin": 300,\n'
+                '      "ymax": 510,\n'
+                '      "xmax": 360\n'
                 '    }\n'
                 '  ]\n'
                 "}\n"
-                "Note: center_x_norm and center_y_norm MUST be normalized between 0.0 and 1.0 within this screen image. Do NOT include explanation text."
+                "Note: ymin, xmin, ymax, xmax MUST be integers between 0 and 1000. Do NOT include explanation text."
             )
             user_text = (
-                f"Identify and locate all requested UI targets inside this touchscreen display. Prompt: '{prompt}'.\n"
-                "Make sure to detect every numeric key (1, 2, 3, 4, 5, 6, 7, 8, 9, 0), "
-                "Cancel button, Pay/Confirm button, and amount display field on the screen."
+                f"Identify and locate all elements matching the prompt: '{prompt}'.\n"
+                "Make sure to scan the entire screen and identify all relevant specific elements."
             )
         else:
             system_instruction = (
-                "You are an industrial precision computer vision and UI automation alignment assistant for a robotic CNC stylus tester.\n"
-                "The image provided is a top-down workspace view. Resting on the table is an electronic device (such as a POS payment terminal, smartphone, or tablet).\n\n"
+                "You are an industrial precision computer vision and UI automation alignment assistant.\n"
+                "The image provided is a top-down workspace view. Resting on the table could be ONE OR MORE electronic devices (smartphones, tablets, POS terminals, laptops, etc.).\n\n"
                 "CRITICAL SPATIAL CONSTRAINTS:\n"
-                "1. First detect the bounding box of the electronic device's illuminated display screen:\n"
-                "   screen_bbox: [xmin, ymin, xmax, ymax] normalized [0.0 to 1.0]. "
-                "If the image already tightly frames the screen, screen_bbox is [0.0, 0.0, 1.0, 1.0].\n"
-                "2. ALL touchable UI elements (buttons, keys 1-9, 0, Cancel, OK, Enter, amount field, input boxes) "
-                "reside STRICTLY INSIDE THE SCREEN of the device. "
-                "Do NOT place targets on the wooden table, scissors, paper roll, or surrounding table edges!\n"
-                "3. For keypad / POS screens:\n"
-                "   - Detect the amount display / header at top of the app.\n"
-                "   - Detect numeric keys 1, 2, 3, 4, 5, 6, 7, 8, 9, 0 strictly inside the keypad grid on screen.\n"
-                "   - Detect action buttons (e.g. 'Cancel Button', 'Pay Button', 'Enter / OK Key').\n"
+                "1. Detect ALL UI elements, keys, buttons, icons, or screens that match the user's prompt.\n"
+                "2. The elements will generally reside on the electronic devices. Do NOT place targets on the wooden table, scissors, paper roll, or surrounding background unless explicitly requested.\n"
+                "3. There may be multiple devices. Scan all of them for the requested targets.\n"
                 f"User target prompt: '{prompt}'.\n\n"
                 "Return JSON ONLY with this exact schema:\n"
                 "{\n"
-                '  "screen_bbox": [xmin, ymin, xmax, ymax],\n'
                 '  "targets": [\n'
                 '    {\n'
-                '      "label": "Professional English name (e.g. Amount Input Field, Key 1, Key 2, Key 3, Key 4, Cancel Button, Pay Button, Enter / OK Key)",\n'
+                '      "label": "Specific Element Name (e.g. Home Button, Settings Icon, Key 1, Volume Toggle)",\n'
                 '      "confidence": 0.98,\n'
-                '      "center_x_norm": 0.50,\n'
-                '      "center_y_norm": 0.55,\n'
-                '      "width_norm": 0.08,\n'
-                '      "height_norm": 0.05\n'
+                '      "ymin": 450,\n'
+                '      "xmin": 300,\n'
+                '      "ymax": 510,\n'
+                '      "xmax": 360\n'
                 '    }\n'
                 '  ]\n'
                 "}\n"
-                "Note: center_x_norm and center_y_norm MUST be normalized between 0.0 and 1.0. "
-                "Every target MUST lie strictly inside screen_bbox! Do NOT include explanation text."
+                "Note: ymin, xmin, ymax, xmax MUST be integers normalized between 0 and 1000 within the entire image frame. Do NOT include explanation text."
             )
             user_text = (
-                f"Identify and locate all requested UI targets inside the device screen. Target prompt: '{prompt}'.\n"
-                "Make sure to detect every numeric key (1, 2, 3, 4, 5, 6, 7, 8, 9, 0), "
-                "Cancel button, Pay/Confirm button, and amount display field on the screen."
+                f"Identify and locate all elements matching the prompt: '{prompt}'.\n"
+                "Make sure to scan all devices in the view and identify all relevant specific elements."
             )
 
         try:
             response = client.chat.completions.create(
-                model=GPT4O_MODEL,
+                model=ai_model,
                 temperature=0.1,
                 messages=[
                     {"role": "system", "content": system_instruction},
@@ -414,24 +405,20 @@ class AIDetectorService:
             cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.MULTILINE).strip()
             data = json.loads(cleaned)
             targets = data.get("targets", [])
-            screen_bbox = data.get("screen_bbox")
 
-            # Validate and clamp targets within screen_bbox if full workspace image
             min_x, min_y, max_x, max_y = 0.0, 0.0, 1.0, 1.0
-            if not is_cropped_screen and screen_bbox and len(screen_bbox) == 4:
-                try:
-                    s_xmin, s_ymin, s_xmax, s_ymax = [float(v) for v in screen_bbox]
-                    if 0.0 <= s_xmin < s_xmax <= 1.0 and 0.0 <= s_ymin < s_ymax <= 1.0:
-                        min_x, min_y, max_x, max_y = s_xmin, s_ymin, s_xmax, s_ymax
-                except Exception:
-                    pass
 
             results = []
             for t in targets:
-                cx_norm = float(t.get("center_x_norm", 0.5))
-                cy_norm = float(t.get("center_y_norm", 0.5))
-                w_norm = float(t.get("width_norm", 0.08))
-                h_norm = float(t.get("height_norm", 0.08))
+                ymin = max(0, min(1000, int(t.get("ymin", 0))))
+                xmin = max(0, min(1000, int(t.get("xmin", 0))))
+                ymax = max(0, min(1000, int(t.get("ymax", 1000))))
+                xmax = max(0, min(1000, int(t.get("xmax", 1000))))
+
+                cx_norm = (xmin + xmax) / 2000.0
+                cy_norm = (ymin + ymax) / 2000.0
+                w_norm = max(0.01, (xmax - xmin) / 1000.0)
+                h_norm = max(0.01, (ymax - ymin) / 1000.0)
 
                 # Clamp coordinates strictly inside boundaries
                 cx_norm = max(min_x, min(max_x, cx_norm))
