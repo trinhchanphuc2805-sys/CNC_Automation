@@ -127,6 +127,7 @@ const WebcamOcrPanel = ({
   // 4-Point ROI Calibration states
   const [calibrationMode, setCalibrationMode] = useState(false);
   const [calibrationPoints, setCalibrationPoints] = useState([]);
+  const [cncCalibrationPoints, setCncCalibrationPoints] = useState([null, null, null, null]);
   const [draggingPointIndex, setDraggingPointIndex] = useState(null);
   const [savedWorkArea, setSavedWorkArea] = useState(null);
 
@@ -1602,33 +1603,12 @@ const WebcamOcrPanel = ({
       <div className="vision-tabs-bar">
         <button
           type="button"
-          className={`vision-tab-btn ${activeTab === 'roi' ? 'vision-tab-btn--active' : ''}`}
-          onClick={() => setActiveTab('roi')}
-        >
-          4-Point Work Area ROI
-        </button>
-        <button
-          type="button"
-          className={`vision-tab-btn ${activeTab === 'spatial' ? 'vision-tab-btn--active' : ''}`}
-          onClick={() => setActiveTab('spatial')}
-        >
-          High-Precision Grid Map
-        </button>
-        <button
-          type="button"
           className={`vision-tab-btn ${activeTab === 'ai' ? 'vision-tab-btn--active' : ''}`}
           onClick={() => setActiveTab('ai')}
         >
           AI Target Detection
         </button>
 
-        {/* <button
-          type="button"
-          className={`vision-tab-btn ${activeTab === 'grid' ? 'vision-tab-btn--active' : ''}`}
-          onClick={() => setActiveTab('grid')}
-        >
-          Fixed Grid (NxM)
-        </button> */}
         <button
           type="button"
           className={`vision-tab-btn ${activeTab === 'ocr' ? 'vision-tab-btn--active' : ''}`}
@@ -1636,13 +1616,6 @@ const WebcamOcrPanel = ({
         >
           OCR Search
         </button>
-        {/* <button
-          type="button"
-          className={`vision-tab-btn ${activeTab === 'redpen' ? 'vision-tab-btn--active' : ''}`}
-          onClick={() => setActiveTab('redpen')}
-        >
-          Auto Calibration (Red Pen Step)
-        </button> */}
       </div>
 
       {/* Tab: Red Pen Marker & Step Auto-Calibration */}
@@ -1785,6 +1758,7 @@ const WebcamOcrPanel = ({
                 <option value="gpt4o">OpenAI GPT-4o (High Precision Vision)</option>
                 <option value="gpt4o-mini">OpenAI GPT-4o-mini (Fast & Cheap)</option>
                 <option value="opencv">OpenCV Contours & Shapes (Offline 0ms)</option>
+                <option value="yolo">YOLO Custom Model (Offline - phone.pt)</option>
               </select>
             </label>
           </div>
@@ -1882,6 +1856,86 @@ const WebcamOcrPanel = ({
               RESET
             </button>
           </div>
+
+          {calibrationPoints.length === 4 && (
+            <div className="vision-physical-mapping" style={{ marginTop: '1rem', padding: '1rem', border: '1px solid #e2e8f0', borderRadius: '0.75rem', background: '#f8fafc' }}>
+              <h4 style={{ fontSize: '0.85rem', fontWeight: 800, color: '#334155', marginBottom: '0.75rem' }}>PHYSICAL CNC MAPPING (OPTIONAL)</h4>
+              <p style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '1rem' }}>Jog the CNC to each of the 4 corners on the camera and save its physical position to create a highly accurate mapping matrix.</p>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                {calibrationPoints.map((pt, idx) => (
+                  <div key={`cnc-calib-${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem', background: 'white', border: '1px solid #cbd5e1', borderRadius: '0.5rem' }}>
+                    <div>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#0f172a' }}>Corner {idx + 1}</span>
+                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', fontSize: '0.7rem', color: '#64748b' }}>
+                          X:
+                          <input
+                            type="number"
+                            value={cncCalibrationPoints[idx]?.x ?? ''}
+                            onChange={(e) => {
+                              const newPoints = [...cncCalibrationPoints];
+                              newPoints[idx] = { ...newPoints[idx], x: Number(e.target.value) };
+                              setCncCalibrationPoints(newPoints);
+                            }}
+                            style={{ width: '45px', marginLeft: '2px', padding: '1px 2px', border: '1px solid #cbd5e1', borderRadius: '3px' }}
+                          />
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', fontSize: '0.7rem', color: '#64748b' }}>
+                          Y:
+                          <input
+                            type="number"
+                            value={cncCalibrationPoints[idx]?.y ?? ''}
+                            onChange={(e) => {
+                              const newPoints = [...cncCalibrationPoints];
+                              newPoints[idx] = { ...newPoints[idx], y: Number(e.target.value) };
+                              setCncCalibrationPoints(newPoints);
+                            }}
+                            style={{ width: '45px', marginLeft: '2px', padding: '1px 2px', border: '1px solid #cbd5e1', borderRadius: '3px' }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="webcam-ocr-button webcam-ocr-button--quiet"
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}
+                      onClick={() => {
+                        const newCncPoints = [...cncCalibrationPoints];
+                        newCncPoints[idx] = { x: currentCncPos.x, y: currentCncPos.y };
+                        setCncCalibrationPoints(newCncPoints);
+                        toast.success(`Corner ${idx + 1} updated to CNC X:${currentCncPos.x}, Y:${currentCncPos.y}`);
+                      }}
+                      title="Read current CNC machine position"
+                    >
+                      READ POS
+                    </button>
+                  </div>
+                ))}
+              </div>
+              
+              <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  className="webcam-ocr-button webcam-ocr-button--primary"
+                  disabled={cncCalibrationPoints.some(p => p === null) || busy}
+                  onClick={async () => {
+                    try {
+                      await runAction('calibrate-cnc', async () => {
+                        await axios.post(`${API_BASE}/webcam/calibrate-cnc-mapping`, {
+                          camera_points: calibrationPoints.map(p => [p.x, p.y]),
+                          cnc_points: cncCalibrationPoints.map(p => [p.x, p.y])
+                        });
+                        toast.success('Physical CNC Mapping calibrated successfully!');
+                      });
+                    } catch (err) {}
+                  }}
+                >
+                  CALIBRATE PHYSICAL MAPPING
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

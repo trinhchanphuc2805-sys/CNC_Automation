@@ -220,6 +220,8 @@ class CameraCalibrationStore:
         self.matrix = None
         self.points = []
         self.cnc_bounds = None  # (x1, y1, width, height)
+        self.cnc_points = []
+        self.cnc_matrix = None
 
     def _order_corners(self, points):
         return order_corners(points)
@@ -245,6 +247,19 @@ class CameraCalibrationStore:
         self.matrix = None
         self.points = []
         self.cnc_bounds = None
+        self.cnc_points = []
+        self.cnc_matrix = None
+
+    def set_cnc_mapping(self, camera_points, cnc_points):
+        if len(camera_points) != 4 or len(cnc_points) != 4:
+            raise ValueError("Must provide exactly 4 camera points and 4 cnc points")
+        
+        src = np.array(camera_points, dtype=np.float32)
+        dst = np.array(cnc_points, dtype=np.float32)
+        
+        self.cnc_matrix = cv2.getPerspectiveTransform(src, dst)
+        self.cnc_points = cnc_points
+        return self.cnc_matrix
 
     def has_matrix(self):
         return self.matrix is not None and len(self.points) == 4
@@ -267,6 +282,11 @@ class CameraCalibrationStore:
 
     def image_point_to_cnc(self, x: float, y: float, x1: float, y1: float, span_x: float, span_y: float, work_area=None):
         """Map camera image pixel (x, y) to physical CNC coordinates (cnc_x, cnc_y)."""
+        if self.cnc_matrix is not None:
+            pt = np.array([[[float(x), float(y)]]], dtype=np.float32)
+            transformed = cv2.perspectiveTransform(pt, self.cnc_matrix)
+            return float(transformed[0, 0, 0]), float(transformed[0, 0, 1])
+
         pts = work_area if work_area is not None else self.points
         if not pts or len(pts) != 4:
             # Fallback to direct offset

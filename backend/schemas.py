@@ -92,6 +92,11 @@ class CalibrationRequest(BaseModel):
     cnc_corners: Optional[list[list[float]]] = None
 
 
+class CalibrateCncMappingRequest(BaseModel):
+    camera_points: list[list[float]]
+    cnc_points: list[list[float]]
+
+
 class ImagePointRequest(BaseModel):
     image_x: float
     image_y: float
@@ -128,7 +133,7 @@ class AiDetectRequest(BaseModel):
     model_config = {'protected_namespaces': ()}  # thêm dòng này
 
     prompt: str = "all buttons, keys, or targets"
-    model_type: str = "gpt4o"  # "gpt4o" or "opencv"
+    model_type: str = "gpt4o"  # "gpt4o", "opencv", or "yolo"
     origin_x: Optional[float] = 0.0
     origin_y: Optional[float] = 0.0
     camera_offset_x: float = 0.0
