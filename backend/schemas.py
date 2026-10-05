@@ -26,6 +26,10 @@ class SequenceRequest(BaseModel):
     a_steps: Optional[int] = None
  
  
+class SolenoidRequest(BaseModel):
+    index: int
+
+
 class AStepsRequest(BaseModel):
     steps: int
  
@@ -133,7 +137,8 @@ class AiDetectRequest(BaseModel):
     model_config = {'protected_namespaces': ()}  # thêm dòng này
 
     prompt: str = "all buttons, keys, or targets"
-    model_type: str = "gpt4o"  # "gpt4o", "opencv", or "yolo"
+    model_type: str = "gpt4o"  # "gpt4o", "gpt4o-mini", "opencv", or "yolo"
+    api_key: Optional[str] = None
     origin_x: Optional[float] = 0.0
     origin_y: Optional[float] = 0.0
     camera_offset_x: float = 0.0
@@ -149,7 +154,28 @@ class AiDetectRequest(BaseModel):
     spacing_y: Optional[float] = -100.0
 
 
+class MapPixelRequest(BaseModel):
+    pixel_x: float
+    pixel_y: float
+    work_area: Optional[list[list[float]]] = None
+    origin_x: Optional[float] = None
+    origin_y: Optional[float] = None
+    camera_offset_x: float = 0.0
+    camera_offset_y: float = 0.0
+    cnc_width: Optional[float] = None
+    cnc_height: Optional[float] = None
+
+
+class OpenAiKeyRequest(BaseModel):
+    api_key: str
+
+
+
 class AutoDetectQuadRequest(BaseModel):
+    image_data: str
+
+
+class SaveSnapshotRequest(BaseModel):
     image_data: str
 
 

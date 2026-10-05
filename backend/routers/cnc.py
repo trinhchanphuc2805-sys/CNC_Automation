@@ -10,6 +10,7 @@ from schemas import (
     MoveToCncRequest,
     SequenceRequest,
     SpeedRequest,
+    SolenoidRequest,
 )
 from services.cnc_service import CNCService, get_service
 from services.vision_service import (
@@ -112,6 +113,20 @@ def manual_move(req: ManualMoveRequest, service: CNCService = Depends(get_servic
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(exc)) from exc
  
+ 
+@router.post("/solenoid")
+def trigger_solenoid(req: SolenoidRequest, service: CNCService = Depends(get_service)):
+    if not service.controller.is_connected():
+        raise HTTPException(status_code=400, detail="Arduino is not connected. Connect a COM port first.")
+    try:
+        service.controller.trigger_solenoid(req.index)
+        return {"status": "success", "message": f"Solenoid {req.index} triggered"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
  
 @router.post("/move-to-image-point")
 def move_to_image_point(req: ImagePointRequest, service: CNCService = Depends(get_service)):

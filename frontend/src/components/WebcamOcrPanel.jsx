@@ -150,8 +150,12 @@ const WebcamOcrPanel = ({
   const [currentCncPos, setCurrentCncPos] = useState({ x: 0, y: 0, a: 0 });
 
   // AI Target Detection states
-  const [aiPrompt, setAiPrompt] = useState('Every individual key on the laptop keyboard');
+  const [aiPrompt, setAiPrompt] = useState('All buttons, app icons, and numeric keypad keys on POS machine screen');
   const [aiModel, setAiModel] = useState('gpt4o');
+  const [openaiApiKey, setOpenaiApiKey] = useState(() => localStorage.getItem('cnc_openai_api_key') || '');
+  const [openaiStatus, setOpenaiStatus] = useState({ configured: false, masked_key: '' });
+  const [showKeyInput, setShowKeyInput] = useState(false);
+  const [isSavingKey, setIsSavingKey] = useState(false);
   const [localAiTargets, setLocalAiTargets] = useState([]);
   const aiTargets = (externalAiTargets && externalAiTargets.length > 0) ? externalAiTargets : localAiTargets;
   const setAiTargets = (val) => {
@@ -235,10 +239,34 @@ const WebcamOcrPanel = ({
     axios.get(`${API_BASE}/webcam/ocr-engine`)
       .then((response) => setEngine(response.data.engine))
       .catch(() => { });
+    axios.get(`${API_BASE}/webcam/openai-status`)
+      .then((res) => { if (res.data) setOpenaiStatus(res.data); })
+      .catch(() => { });
     refreshCncStatus();
     const timer = setInterval(refreshCncStatus, 2500);
     return () => clearInterval(timer);
   }, []);
+
+  const handleSaveOpenAiKey = async () => {
+    if (!openaiApiKey.trim()) {
+      toast.error('Vui lòng nhập API Key');
+      return;
+    }
+    setIsSavingKey(true);
+    const toastId = toast.loading('Đang kiểm tra và lưu OpenAI API Key...');
+    try {
+      const res = await axios.post(`${API_BASE}/webcam/openai-key`, { api_key: openaiApiKey.trim() });
+      localStorage.setItem('cnc_openai_api_key', openaiApiKey.trim());
+      toast.success(res.data.message || 'Lưu API Key thành công!', { id: toastId });
+      setShowKeyInput(false);
+      const statusRes = await axios.get(`${API_BASE}/webcam/openai-status`);
+      if (statusRes.data) setOpenaiStatus(statusRes.data);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Lưu API Key thất bại', { id: toastId });
+    } finally {
+      setIsSavingKey(false);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -248,7 +276,11 @@ const WebcamOcrPanel = ({
           streamRef.current.getTracks().forEach((track) => track.stop());
         }
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: cameraId ? { deviceId: { exact: cameraId } } : true,
+          video: {
+            ...(cameraId ? { deviceId: { exact: cameraId } } : {}),
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
           audio: false,
         });
         if (!active) {
@@ -344,6 +376,68 @@ const WebcamOcrPanel = ({
       window.removeEventListener('pointerup', handlePointerUp);
     };
   }, [draggingPointIndex]);
+
+  // Dragging AI-detected target markers (manual correction)
+  const [draggingTargetId, setDraggingTargetId] = useState(null);
+  const dragTargetMovedRef = useRef(false);
+  const dragTargetLastRef = useRef(null);
+
+  useEffect(() => {
+    if (draggingTargetId === null) return undefined;
+
+    const handlePointerMove = (event) => {
+      const point = getPointerPosition(event);
+      dragTargetMovedRef.current = true;
+      dragTargetLastRef.current = point;
+      setAiTargets((targets) => targets.map((t) => {
+        if (t.id !== draggingTargetId) return t;
+        const dx = point.x - t.pixel_x;
+        const dy = point.y - t.pixel_y;
+        return {
+          ...t,
+          pixel_x: point.x,
+          pixel_y: point.y,
+          center_x: point.x,
+          center_y: point.y,
+          box_polygon: t.box_polygon ? t.box_polygon.map((p) => [p[0] + dx, p[1] + dy]) : t.box_polygon,
+        };
+      }));
+    };
+
+    const handlePointerUp = async () => {
+      const id = draggingTargetId;
+      const point = dragTargetLastRef.current;
+      setDraggingTargetId(null);
+      if (!dragTargetMovedRef.current || !point) return;
+      try {
+        const activeWorkArea = (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : savedWorkArea);
+        const res = await axios.post(`${API_BASE}/webcam/map-pixel`, {
+          pixel_x: point.x,
+          pixel_y: point.y,
+          work_area: activeWorkArea,
+          origin_x: originX,
+          origin_y: originY,
+          camera_offset_x: cameraOffsetX,
+          camera_offset_y: cameraOffsetY,
+          cnc_width: cncWidth,
+          cnc_height: cncHeight,
+        });
+        setAiTargets((targets) => targets.map((t) => (
+          t.id === id ? { ...t, cnc_x: res.data.cnc_x, cnc_y: res.data.cnc_y } : t
+        )));
+      } catch (err) {
+        toast.error(err.response?.data?.detail || 'Failed to update CNC coordinates after drag');
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draggingTargetId]);
 
   // 1. Calibration Handlers
   const persistCalibration = async () => {
@@ -512,27 +606,7 @@ const WebcamOcrPanel = ({
     await runAction('set-zero', async () => {
       await axios.post(`${API_BASE}/cnc/zero`);
       setCurrentCncPos({ x: 0, y: 0, a: currentCncPos.a });
-      // When zeroing at Point 1, sync redPenPos with Point 1 of the frame
-      if (calibrationPoints && calibrationPoints.length > 0) {
-        setRedPenPos({
-          center_x: calibrationPoints[0].x,
-          center_y: calibrationPoints[0].y,
-          tip_x: calibrationPoints[0].x,
-          tip_y: calibrationPoints[0].y,
-          radius: 12,
-          manual: true,
-        });
-      } else if (savedWorkArea && savedWorkArea.length > 0) {
-        setRedPenPos({
-          center_x: savedWorkArea[0][0],
-          center_y: savedWorkArea[0][1],
-          tip_x: savedWorkArea[0][0],
-          tip_y: savedWorkArea[0][1],
-          radius: 12,
-          manual: true,
-        });
-      }
-      toast.success('Origin Zero (0, 0) calibrated at current toolhead position!');
+      toast.success('Origin Zero (0, 0) set at current physical toolhead position!');
     });
   };
 
@@ -565,6 +639,7 @@ const WebcamOcrPanel = ({
       work_area: activeWorkArea,
       prompt: aiPrompt.trim() || 'all numeric keys 1, 2, 3, 4, and Enter OK buttons on ATM keypad',
       model_type: aiModel,
+      api_key: openaiApiKey.trim() || undefined,
       origin_x: originX,
       origin_y: originY,
       camera_offset_x: cameraOffsetX,
@@ -1270,6 +1345,22 @@ const WebcamOcrPanel = ({
 
 
 
+  const handleSaveSnapshot = () => runAction('snapshot', async () => {
+    const imageData = captureFrame();
+    if (!imageData) throw new Error('Camera preview is not ready yet');
+    
+    toast.loading('Saving snapshot...', { id: 'snapshot' });
+    const response = await axios.post(`${API_BASE}/webcam/save-snapshot`, {
+      image_data: imageData,
+    });
+    
+    if (response.data.success) {
+      toast.success(`Snapshot saved to pictures folder!`, { id: 'snapshot' });
+    } else {
+      toast.error('Failed to save snapshot', { id: 'snapshot' });
+    }
+  });
+
   // 6. OCR Handlers
   const handleOcr = () => runAction('ocr', async () => {
     if (!pattern.trim()) {
@@ -1463,19 +1554,31 @@ const WebcamOcrPanel = ({
           </div>
         )}
 
-        {/* 4-STEP PIPELINE ACTION TOOLBAR */}
+        {/* 3-STEP PIPELINE ACTION TOOLBAR */}
         <div>
           <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2.5 flex items-center justify-between">
-            <span>4-Step Vision & CNC Execution Pipeline:</span>
+            <span>3-Step Vision & CNC Execution Pipeline:</span>
             <span className="text-[10px] text-slate-400 font-normal">
-              Scan Frame &rarr; Select Stylus Tip &rarr; Detect Screen Elements &rarr; Execute CNC Automation
+              Scan Frame &rarr; Detect Screen Elements &rarr; Execute CNC Automation
             </span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {/* Step 1: Scan 4-Corner Frame */}
             <button
               type="button"
-              onClick={handleAutoDetectQuad}
+              onClick={() => {
+                setActiveTab('roi');
+                if (calibrationPoints.length < 4) {
+                  const w = frameWidth || 640;
+                  const h = frameHeight || 480;
+                  setCalibrationPoints([
+                    { x: Math.round(w * 0.2), y: Math.round(h * 0.2) },
+                    { x: Math.round(w * 0.8), y: Math.round(h * 0.2) },
+                    { x: Math.round(w * 0.8), y: Math.round(h * 0.8) },
+                    { x: Math.round(w * 0.2), y: Math.round(h * 0.8) },
+                  ]);
+                }
+              }}
               disabled={busy}
               className="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-white text-left transition-all group cursor-pointer"
             >
@@ -1493,31 +1596,7 @@ const WebcamOcrPanel = ({
               </span>
             </button>
 
-            {/* Step 2: Select Stylus Pen Tip */}
-            <button
-              type="button"
-              onClick={handleDetectRedPen}
-              disabled={busy}
-              className="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-white text-left transition-all group cursor-pointer"
-              title="Click to auto-detect red stylus pen tip on camera"
-            >
-              <div className="flex items-center gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-[#fe5d70] text-white flex items-center justify-center font-bold text-xs">
-                  2
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-slate-800">Select Stylus Tip</div>
-                  <div className="text-[10px] text-slate-500">
-                    {manualPenPickMode ? 'Click on preview to pick' : 'Auto-detect or pick tip'}
-                  </div>
-                </div>
-              </div>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${redPenPos ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
-                {redPenPos ? `(${redPenPos.tip_x ?? redPenPos.center_x}, ${redPenPos.tip_y ?? redPenPos.center_y})` : 'Not selected'}
-              </span>
-            </button>
-
-            {/* Step 3: Run Detect AI Elements */}
+            {/* Step 2: Run Detect AI Elements */}
             <button
               type="button"
               onClick={handleRunAiDetection}
@@ -1533,7 +1612,7 @@ const WebcamOcrPanel = ({
                   {loading === 'ai-detect' ? (
                     <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   ) : (
-                    '3'
+                    '2'
                   )}
                 </div>
                 <div>
@@ -1553,7 +1632,7 @@ const WebcamOcrPanel = ({
               </span>
             </button>
 
-            {/* Step 4: Execute CNC Automation */}
+            {/* Step 3: Execute CNC Automation */}
             {!runningSequence ? (
               <button
                 type="button"
@@ -1607,6 +1686,26 @@ const WebcamOcrPanel = ({
           onClick={() => setActiveTab('ai')}
         >
           AI Target Detection
+        </button>
+
+        <button
+          type="button"
+          className={`vision-tab-btn ${activeTab === 'roi' ? 'vision-tab-btn--active' : ''}`}
+          onClick={() => {
+            setActiveTab('roi');
+            if (calibrationPoints.length < 4) {
+              const w = frameWidth || 640;
+              const h = frameHeight || 480;
+              setCalibrationPoints([
+                { x: Math.round(w * 0.2), y: Math.round(h * 0.2) },
+                { x: Math.round(w * 0.8), y: Math.round(h * 0.2) },
+                { x: Math.round(w * 0.8), y: Math.round(h * 0.8) },
+                { x: Math.round(w * 0.2), y: Math.round(h * 0.8) },
+              ]);
+            }
+          }}
+        >
+          📐 4-Point ROI & CNC Mapping
         </button>
 
         <button
@@ -1741,6 +1840,48 @@ const WebcamOcrPanel = ({
       {/* Tab 1: AI Detection Controls */}
       {activeTab === 'ai' && (
         <div className="vision-control-deck">
+          {/* OpenAI API Key Status & Quick Config */}
+          <div className="flex items-center justify-between px-3 py-2 bg-slate-900/80 rounded-xl border border-slate-700/60 text-xs">
+            <div className="flex items-center gap-2">
+              <span className={`inline-block w-2.5 h-2.5 rounded-full ${openaiStatus.configured ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+              <span className="font-semibold text-slate-200">
+                {openaiStatus.configured
+                  ? `OpenAI API Key: ${openaiStatus.masked_key}`
+                  : 'Chưa cấu hình OpenAI API Key'}
+              </span>
+              <span className="text-[11px] text-slate-400 hidden sm:inline">
+                (Dùng {aiModel === 'gpt4o' ? 'GPT-4o (Độ chính xác cao)' : 'GPT-4o-mini (Nhanh)'} phát hiện nút bấm & màn hình)
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowKeyInput((v) => !v)}
+              className="text-xs text-sky-400 hover:text-sky-300 underline font-medium cursor-pointer"
+            >
+              {showKeyInput ? 'Đóng' : 'Đổi / Nhập API Key'}
+            </button>
+          </div>
+
+          {showKeyInput && (
+            <div className="flex items-center gap-2 p-2 bg-slate-800/90 rounded-xl border border-sky-500/40">
+              <input
+                type="password"
+                value={openaiApiKey}
+                onChange={(e) => setOpenaiApiKey(e.target.value)}
+                placeholder="Dán OpenAI API Key (sk-proj-...)"
+                className="flex-1 bg-slate-950 px-3 py-1.5 rounded-lg text-xs text-white border border-slate-700 focus:outline-none focus:border-sky-500"
+              />
+              <button
+                type="button"
+                onClick={handleSaveOpenAiKey}
+                disabled={isSavingKey}
+                className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold disabled:opacity-50 cursor-pointer"
+              >
+                {isSavingKey ? 'Đang lưu...' : 'Lưu Key'}
+              </button>
+            </div>
+          )}
+
           <div className="vision-input-row">
             <label className="vision-field-grow">
               Detection Prompt / Search Target
@@ -1856,6 +1997,30 @@ const WebcamOcrPanel = ({
               RESET
             </button>
           </div>
+
+          {calibrationPoints.length !== 4 && (
+            <div style={{ marginTop: '1rem', padding: '1rem', border: '1px dashed #94a3b8', borderRadius: '0.75rem', textAlign: 'center', background: '#f8fafc' }}>
+              <p style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                Chưa có 4 điểm góc trên video. Nhấn nút bên dưới để tạo 4 mốc kéo thả:
+              </p>
+              <button
+                type="button"
+                className="webcam-ocr-button webcam-ocr-button--primary"
+                onClick={() => {
+                  const w = frameWidth || 640;
+                  const h = frameHeight || 480;
+                  setCalibrationPoints([
+                    { x: Math.round(w * 0.2), y: Math.round(h * 0.2) },
+                    { x: Math.round(w * 0.8), y: Math.round(h * 0.2) },
+                    { x: Math.round(w * 0.8), y: Math.round(h * 0.8) },
+                    { x: Math.round(w * 0.2), y: Math.round(h * 0.8) },
+                  ]);
+                }}
+              >
+                📍 TẠO 4 GÓC MẪU
+              </button>
+            </div>
+          )}
 
           {calibrationPoints.length === 4 && (
             <div className="vision-physical-mapping" style={{ marginTop: '1rem', padding: '1rem', border: '1px solid #e2e8f0', borderRadius: '0.75rem', background: '#f8fafc' }}>
@@ -2081,6 +2246,36 @@ const WebcamOcrPanel = ({
             style={{ cursor: (activeTab === 'roi' && calibrationMode) ? 'crosshair' : 'pointer' }}
           >
             <video ref={videoRef} autoPlay muted playsInline />
+            
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); handleSaveSnapshot(); }}
+              style={{
+                position: 'absolute',
+                top: '10px',
+                right: '10px',
+                zIndex: 50,
+                backgroundColor: 'rgba(15, 23, 42, 0.7)',
+                color: 'white',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                backdropFilter: 'blur(4px)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+                transition: 'all 0.2s ease-in-out'
+              }}
+              title="Save Snapshot to /pictures folder"
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.9)'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.7)'}
+            >
+              📸 Capture
+            </button>
 
             {/* AI Detection Loading HUD Scanning Overlay */}
             {loading === 'ai-detect' && (
@@ -2159,12 +2354,30 @@ const WebcamOcrPanel = ({
                   type="button"
                   key={`target-tag-${target.id}`}
                   className={`vision-ai-marker ${isSelected ? 'vision-ai-marker--selected' : ''}`}
-                  style={{ left: `${xPercent}%`, top: `${yPercent}%` }}
+                  style={{
+                    left: `${xPercent}%`,
+                    top: `${yPercent}%`,
+                    pointerEvents: 'auto',
+                    touchAction: 'none',
+                    cursor: draggingTargetId === target.id ? 'grabbing' : 'grab',
+                    zIndex: draggingTargetId === target.id ? 30 : undefined,
+                  }}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    dragTargetMovedRef.current = false;
+                    dragTargetLastRef.current = null;
+                    setSelectedTargetId(target.id);
+                    setDraggingTargetId(target.id);
+                  }}
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (dragTargetMovedRef.current) {
+                      dragTargetMovedRef.current = false;
+                      return;
+                    }
                     handleMoveToCncTarget(target);
                   }}
-                  title={`#${target.id} ${formatLabelToEnglish(target.label)} → CNC (${target.cnc_x}, ${target.cnc_y})`}
+                  title={`#${target.id} ${formatLabelToEnglish(target.label)} → CNC (${target.cnc_x}, ${target.cnc_y}) — drag to reposition, click to move stylus`}
                 >
                   <div className="vision-ai-dot">
                     <span className="vision-ai-dot-num">{target.id}</span>

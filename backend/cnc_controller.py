@@ -258,6 +258,11 @@ class CNCController:
         self.move_manual('A', -press_delta)
         self.set_a_origin()
  
+    def trigger_solenoid(self, index: int):
+        if index not in (1, 2):
+            raise ValueError("Solenoid index must be 1 or 2")
+        self.send_command(f"S{index}")
+ 
     def get_target_position(self, key: str):
         if key not in self.KEY_LAYOUT:
             return None
