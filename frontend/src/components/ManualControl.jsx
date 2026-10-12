@@ -1,10 +1,31 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 
 const ManualControl = () => {
   const [steps, setSteps] = useState(100);
   const [aSteps, setASteps] = useState(100);
+  const [useSolenoid, setUseSolenoid] = useState(true);
+  const [solenoidIndex, setSolenoidIndex] = useState(1);
+  const [solenoidDelay, setSolenoidDelay] = useState(300);
+
+  useEffect(() => {
+    axios.get('http://localhost:8000/api/com/status').then((res) => {
+      const d = res.data || {};
+      if (d.a_press_steps) setASteps(d.a_press_steps);
+      if (typeof d.press_use_solenoid === 'boolean') setUseSolenoid(d.press_use_solenoid);
+      if (d.press_solenoid_index) setSolenoidIndex(d.press_solenoid_index);
+      if (typeof d.press_solenoid_delay_ms === 'number') setSolenoidDelay(d.press_solenoid_delay_ms);
+    }).catch(() => {});
+  }, []);
+
+  const savePressConfig = async (patch) => {
+    try {
+      await axios.post('http://localhost:8000/api/cnc/press-config', patch);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Unable to save press config');
+    }
+  };
 
   const setAOrigin = async () => {
     try {
@@ -96,6 +117,24 @@ const ManualControl = () => {
           <input type="number" min="1" value={aSteps}
             onChange={(e) => saveASteps(parseInt(e.target.value) || 0)}
             className="w-full border border-amber-300 rounded-lg p-2 mb-3 text-center font-mono" />
+          <label className="flex items-center justify-center gap-2 text-sm font-semibold text-amber-800 mb-2">
+            <input type="checkbox" checked={useSolenoid}
+              onChange={(e) => { setUseSolenoid(e.target.checked); savePressConfig({ use_solenoid: e.target.checked }); }} />
+            Fire solenoid after press down
+          </label>
+          {useSolenoid && (
+            <div className="flex gap-2 mb-3">
+              <select value={solenoidIndex}
+                onChange={(e) => { const v = parseInt(e.target.value); setSolenoidIndex(v); savePressConfig({ solenoid_index: v }); }}
+                className="flex-1 border border-amber-300 rounded-lg p-2 text-center font-mono">
+                <option value={1}>S1</option>
+                <option value={2}>S2</option>
+              </select>
+              <input type="number" min="0" step="50" value={solenoidDelay} title="Delay (ms) after firing, before lifting"
+                onChange={(e) => { const v = Math.max(0, parseInt(e.target.value) || 0); setSolenoidDelay(v); savePressConfig({ solenoid_delay_ms: v }); }}
+                className="flex-1 border border-amber-300 rounded-lg p-2 text-center font-mono" />
+            </div>
+          )}
           <div className="flex gap-2 justify-center">
             <button onClick={() => handleMove('A', -aSteps)}
               className="manual-control__button flex-1 bg-sky-500 text-white font-bold py-3 rounded-lg hover:bg-sky-600 transition-colors shadow active:scale-95">

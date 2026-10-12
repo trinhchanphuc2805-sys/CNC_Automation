@@ -627,8 +627,9 @@ body {
   display: block;
   width: 100%;
   height: auto;
-  max-height: 65vh;
-  /* object-fit: contain; */
+  /* No max-height / letterboxing: overlays are positioned over the whole element,
+     so the element must have exactly the video's aspect ratio to stay aligned. */
+  object-fit: fill;
 }
 
 .vision-svg-overlay {
@@ -695,18 +696,36 @@ body {
 
 /* Target bounding box SVG polygons */
 .vision-ai-box-poly {
-  fill: rgba(16, 185, 129, 0.12);
+  fill: none;
   stroke: #10b981;
   stroke-width: 2;
-  stroke-dasharray: 4, 3;
-  transition: all 0.2s ease;
+  vector-effect: non-scaling-stroke;
+  transition: stroke 0.15s ease;
 }
 
 .vision-ai-box-poly--selected {
-  fill: rgba(245, 158, 11, 0.25);
+  fill: rgba(245, 158, 11, 0.18);
   stroke: #f59e0b;
   stroke-width: 3;
-  stroke-dasharray: none;
+}
+
+/* YOLO-style label tab above the box */
+.vision-ai-box-label {
+  position: absolute;
+  transform: translateY(-100%);
+  background: #10b981;
+  color: #ffffff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 9;
+}
+
+.vision-ai-box-label--selected {
+  background: #f59e0b;
 }
 
 /* Tag visible by default with crisp readable badge */

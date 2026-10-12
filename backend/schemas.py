@@ -34,6 +34,13 @@ class AStepsRequest(BaseModel):
     steps: int
  
  
+class PressConfigRequest(BaseModel):
+    steps: Optional[int] = None
+    use_solenoid: Optional[bool] = None
+    solenoid_index: Optional[int] = None
+    solenoid_delay_ms: Optional[int] = None
+ 
+ 
 class OrientationRequest(BaseModel):
     orientation: int
  

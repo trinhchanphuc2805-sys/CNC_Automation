@@ -35,6 +35,10 @@ class CNCController:
         self.current_y = 0
         self.current_a = 0
         self.a_press_steps = 100
+        # Press cycle: A down -> fire solenoid -> wait -> A up
+        self.press_use_solenoid = True
+        self.press_solenoid_index = 1
+        self.press_solenoid_delay_ms = 300
         self.x1 = 0
         self.y1 = 0
         self.spach_x = 100
@@ -249,14 +253,35 @@ class CNCController:
             raise ValueError("A press steps must be >= 1")
         self.a_press_steps = steps
  
-    def press_and_return_a(self, steps=None):
+    def set_press_config(self, steps=None, use_solenoid=None, solenoid_index=None, solenoid_delay_ms=None):
+        if steps is not None:
+            self.set_a_press_steps(steps)
+        if use_solenoid is not None:
+            self.press_use_solenoid = bool(use_solenoid)
+        if solenoid_index is not None:
+            if solenoid_index not in (1, 2):
+                raise ValueError("Solenoid index must be 1 or 2")
+            self.press_solenoid_index = solenoid_index
+        if solenoid_delay_ms is not None:
+            if solenoid_delay_ms < 0:
+                raise ValueError("Solenoid delay must be >= 0")
+            self.press_solenoid_delay_ms = solenoid_delay_ms
+ 
+    def press_and_return_a(self, steps=None, use_solenoid=None):
         press_steps = self.a_press_steps if steps is None else steps
         if press_steps < 1:
             raise ValueError("A press steps must be >= 1")
+        fire = self.press_use_solenoid if use_solenoid is None else use_solenoid
         press_delta = self.A_PRESS_DIRECTION * press_steps
         self.move_manual('A', press_delta)
-        self.move_manual('A', -press_delta)
-        self.set_a_origin()
+        try:
+            if fire:
+                self.trigger_solenoid(self.press_solenoid_index)
+                if self.press_solenoid_delay_ms > 0:
+                    time.sleep(self.press_solenoid_delay_ms / 1000.0)
+        finally:
+            self.move_manual('A', -press_delta)
+            self.set_a_origin()
  
     def trigger_solenoid(self, index: int):
         if index not in (1, 2):

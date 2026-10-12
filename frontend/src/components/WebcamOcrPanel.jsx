@@ -151,7 +151,7 @@ const WebcamOcrPanel = ({
 
   // AI Target Detection states
   const [aiPrompt, setAiPrompt] = useState('All buttons, app icons, and numeric keypad keys on POS machine screen');
-  const [aiModel, setAiModel] = useState('gpt4o');
+  const [aiModel, setAiModel] = useState('yolo');
   const [openaiApiKey, setOpenaiApiKey] = useState(() => localStorage.getItem('cnc_openai_api_key') || '');
   const [openaiStatus, setOpenaiStatus] = useState({ configured: false, masked_key: '' });
   const [showKeyInput, setShowKeyInput] = useState(false);
@@ -166,6 +166,26 @@ const WebcamOcrPanel = ({
   };
   const [warpedPreview, setWarpedPreview] = useState('');
   const [selectedTargetId, setSelectedTargetId] = useState(null);
+  const [overlayMode, setOverlayMode] = useState(() => localStorage.getItem('cnc_overlay_mode') || 'box');
+  const handleSetOverlayMode = (mode) => {
+    setOverlayMode(mode);
+    localStorage.setItem('cnc_overlay_mode', mode);
+  };
+  const handleDeleteTarget = (id) => {
+    setAiTargets(aiTargets.filter((t) => t.id !== id));
+    setSelectedTargetId((cur) => (cur === id ? null : cur));
+  };
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Delete' || selectedTargetId == null) return;
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      handleDeleteTarget(selectedTargetId);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTargetId, aiTargets]);
   const [lastTargetPoint, setLastTargetPoint] = useState(null);
   const [runningSequence, setRunningSequence] = useState(false);
 
@@ -314,7 +334,16 @@ const WebcamOcrPanel = ({
     };
   }, [cameraId, cameraRetry]);
 
+  const cncActiveUntilRef = useRef(0);
+  const markCncMoving = (extraMs = 1800) => {
+    cncActiveUntilRef.current = Date.now() + extraMs;
+  };
+
   const runAction = async (action, callback) => {
+    const isCncMotion = /jog|move|cnc|point|zero|origin|calibrate/i.test(action);
+    if (isCncMotion) {
+      markCncMoving(15000);
+    }
     setLoading(action);
     try {
       await callback();
@@ -322,6 +351,9 @@ const WebcamOcrPanel = ({
       toast.error(error.response?.data?.detail || error.message || 'Action failed');
     } finally {
       setLoading('');
+      if (isCncMotion) {
+        markCncMoving(1800);
+      }
     }
   };
 
@@ -525,6 +557,51 @@ const WebcamOcrPanel = ({
 
     const { x, y, width, height } = getFrameCoordsFromEvent(event);
 
+    // Click-to-add manual target mode
+    if (addCustomTargetMode) {
+      setAddCustomTargetMode(false);
+      const label = window.prompt('Enter element name (e.g., Key 7, OK, Cancel):', `Target ${aiTargets.length + 1}`);
+      if (label && label.trim()) {
+        try {
+          const activeWorkArea = (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : savedWorkArea);
+          const res = await axios.post(`${API_BASE}/webcam/map-pixel`, {
+            pixel_x: x,
+            pixel_y: y,
+            work_area: activeWorkArea,
+            origin_x: originX,
+            origin_y: originY,
+            camera_offset_x: cameraOffsetX,
+            camera_offset_y: cameraOffsetY,
+            cnc_width: cncWidth,
+            cnc_height: cncHeight,
+          });
+          const newTarget = {
+            id: aiTargets.length > 0 ? Math.max(...aiTargets.map((t) => t.id || 0)) + 1 : 1,
+            label: formatLabelToEnglish(label.trim()),
+            pixel_x: Math.round(x),
+            pixel_y: Math.round(y),
+            cnc_x: res.data.cnc_x,
+            cnc_y: res.data.cnc_y,
+            width: 44,
+            height: 44,
+            confidence: 1.0,
+            manual: true,
+            box_polygon: [
+              [Math.round(x) - 22, Math.round(y) - 22],
+              [Math.round(x) + 22, Math.round(y) - 22],
+              [Math.round(x) + 22, Math.round(y) + 22],
+              [Math.round(x) - 22, Math.round(y) + 22],
+            ],
+          };
+          setAiTargets((prev) => [...prev, newTarget]);
+          toast.success(`Added "${newTarget.label}" at CNC (X: ${newTarget.cnc_x}, Y: ${newTarget.cnc_y})!`);
+        } catch (err) {
+          toast.error(err.response?.data?.detail || 'Failed to map coordinates for custom target');
+        }
+      }
+      return;
+    }
+
     if (activeTab === 'redpen' && manualPenPickMode) {
       setRedPenPos({ center_x: x, center_y: y, tip_x: x, tip_y: y, radius: 12, manual: true });
       setManualPenPickMode(false);
@@ -679,6 +756,543 @@ const WebcamOcrPanel = ({
       toast.error(response.data.message || 'AI detection returned no targets', { id: 'ai-detect' });
     }
   });
+
+  // ---- Realtime YOLO over WebSocket: stream frames continuously, overlay updates live ----
+  // ---- Smart Auto-Detect on Screen Change over WebSocket ----
+  // Continuously monitors the screen area for transitions/motion.
+  // When motion stops and screen settles (~400ms), triggers 2-pass consensus detection and locks coordinates.
+  const [liveDetect, setLiveDetect] = useState(false);
+  const [liveStatus, setLiveStatus] = useState('');
+  const [addCustomTargetMode, setAddCustomTargetMode] = useState(false);
+  const liveCfgRef = useRef(null);
+  const forceDetectRef = useRef(null);
+
+  // freshest settings for the stream (sent to the server when detecting)
+  liveCfgRef.current = {
+    orig_width: videoRef.current?.videoWidth || 0,
+    work_area: (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : savedWorkArea),
+    origin_x: originX,
+    origin_y: originY,
+    camera_offset_x: cameraOffsetX,
+    camera_offset_y: cameraOffsetY,
+    cnc_width: cncWidth,
+    cnc_height: cncHeight,
+  };
+
+  useEffect(() => {
+    if (!liveDetect || runningSequence || isExecutingScript) {
+      setLiveStatus(liveDetect ? 'Paused (CNC running)' : '');
+      forceDetectRef.current = null;
+      return undefined;
+    }
+
+    const SEND_WIDTH = 640;
+    const SAMPLE_DIM = 128;
+    const GRID_SIZE = 8;             // 8x8 = 64 spatial blocks covering phone screen
+    const BLOCK_SIZE = 16;           // 16x16 = 256 pixels per block
+    const BLOCK_CHANGE_THRESHOLD = 9.0;  // Threshold for a single block to be considered modified
+    const MIN_GLOBAL_BLOCK_RATIO = 0.28; // At least 28% of screen blocks (>= 18/64) must change to confirm a real page transition
+    const MOTION_THRESHOLD = 7.5;    // Higher threshold: ignore camera noise and mechanical vibrations
+    const MIN_SCREEN_CHANGE = 8.2;   // Significant difference from baseline to confirm real new page
+    const SETTLE_DELAY_MS = 450;     // Wait 450ms stationary: page finished loading & stylus gone
+
+    let stopped = false;
+    let ws = null;
+    let retryTimer = null;
+    let checkInterval = null;
+    let isDetecting = false;
+    let justFinishedCncMotion = false;
+
+    // Request tracking: watchdog (avoid freezing) + luma at send time (discard stale results)
+    let detectWatchdog = null;
+    let sentLuma = null;
+    const clearWatchdog = () => { clearTimeout(detectWatchdog); detectWatchdog = null; };
+    const setStatus = (text) => setLiveStatus((cur) => (cur === text ? cur : text));
+
+    // Screen change tracking state
+    let baselineLuma = null;
+    let prevLuma = null;
+    let stableStartTime = null;
+    let screenState = 'INIT'; // 'INIT' | 'DETECTING' | 'STABLE' | 'CHANGING'
+
+    // Off-screen sampling canvas (128x128 for lightweight ~0.2ms diff check)
+    const sampleCanvas = document.createElement('canvas');
+    sampleCanvas.width = SAMPLE_DIM;
+    sampleCanvas.height = SAMPLE_DIM;
+    const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+
+    // Detection frame canvas (640px)
+    const sendCanvas = document.createElement('canvas');
+
+    const getCropRect = (video, workArea) => {
+      const vw = video.videoWidth || 640;
+      const vh = video.videoHeight || 480;
+      if (Array.isArray(workArea) && workArea.length >= 4) {
+        const xs = workArea.map((p) => (Array.isArray(p) ? p[0] : (p?.x ?? 0)));
+        const ys = workArea.map((p) => (Array.isArray(p) ? p[1] : (p?.y ?? 0)));
+        const minX = Math.max(0, Math.min(...xs));
+        const minY = Math.max(0, Math.min(...ys));
+        const maxX = Math.min(vw, Math.max(...xs));
+        const maxY = Math.min(vh, Math.max(...ys));
+        const w = maxX - minX;
+        const h = maxY - minY;
+        if (w >= 40 && h >= 40) {
+          return { x: minX, y: minY, w, h };
+        }
+      }
+      return { x: 0, y: 0, w: vw, h: vh };
+    };
+
+    const extractSampleLuma = (video) => {
+      if (!video || video.readyState < 2 || !video.videoWidth) return null;
+      const currentWorkArea = liveCfgRef.current?.work_area;
+      const crop = getCropRect(video, currentWorkArea);
+      sampleCtx.drawImage(
+        video,
+        crop.x, crop.y, crop.w, crop.h,
+        0, 0, SAMPLE_DIM, SAMPLE_DIM
+      );
+      const data = sampleCtx.getImageData(0, 0, SAMPLE_DIM, SAMPLE_DIM).data;
+      const luma = new Uint8Array(SAMPLE_DIM * SAMPLE_DIM);
+      for (let i = 0, j = 0; i < data.length; i += 4, j += 1) {
+        luma[j] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+      }
+      return luma;
+    };
+
+    const calcLumaDiff = (a, b) => {
+      if (!a || !b || a.length !== b.length) return 0;
+      let sum = 0;
+      for (let i = 0; i < a.length; i += 1) {
+        sum += Math.abs(a[i] - b[i]);
+      }
+      return sum / a.length;
+    };
+
+    // 64-Block Spatial Analysis: distinguishes global page transitions from local stylus obstructions
+    const analyzeBlockDiff = (curr, base) => {
+      if (!curr || !base || curr.length !== base.length) {
+        return { avgDiff: 0, changedBlockRatio: 0, changedBlocks: 0 };
+      }
+      let totalDiff = 0;
+      let changedBlocks = 0;
+
+      for (let by = 0; by < GRID_SIZE; by += 1) {
+        for (let bx = 0; bx < GRID_SIZE; bx += 1) {
+          let blockSum = 0;
+          for (let y = 0; y < BLOCK_SIZE; y += 1) {
+            const rowStart = (by * BLOCK_SIZE + y) * SAMPLE_DIM;
+            for (let x = 0; x < BLOCK_SIZE; x += 1) {
+              const idx = rowStart + (bx * BLOCK_SIZE + x);
+              blockSum += Math.abs(curr[idx] - base[idx]);
+            }
+          }
+          totalDiff += blockSum;
+          const blockAvg = blockSum / (BLOCK_SIZE * BLOCK_SIZE);
+          if (blockAvg >= BLOCK_CHANGE_THRESHOLD) {
+            changedBlocks += 1;
+          }
+        }
+      }
+
+      const totalBlocks = GRID_SIZE * GRID_SIZE; // 64
+      const avgDiff = totalDiff / (SAMPLE_DIM * SAMPLE_DIM);
+      const changedBlockRatio = changedBlocks / totalBlocks;
+
+      return { avgDiff, changedBlockRatio, changedBlocks };
+    };
+
+    const sendFrameBlob = () => {
+      if (stopped || !ws || ws.readyState !== WebSocket.OPEN) {
+        isDetecting = false;
+        return;
+      }
+      const video = videoRef.current;
+      if (!video || video.readyState < 2 || !video.videoWidth) {
+        isDetecting = false;
+        return;
+      }
+      const w = Math.min(SEND_WIDTH, video.videoWidth);
+      const h = Math.round((video.videoHeight / video.videoWidth) * w);
+      sendCanvas.width = w;
+      sendCanvas.height = h;
+      sentLuma = extractSampleLuma(video);
+      sendCanvas.getContext('2d').drawImage(video, 0, 0, w, h);
+
+      sendCanvas.toBlob((blob) => {
+        if (stopped || !blob || ws.readyState !== WebSocket.OPEN) {
+          isDetecting = false;
+          return;
+        }
+        ws.send(JSON.stringify({ ...liveCfgRef.current, orig_width: video.videoWidth }));
+        ws.send(blob);
+      }, 'image/jpeg', 0.72);
+    };
+
+    const triggerDetectNow = (reason = 'change') => {
+      if (stopped || isDetecting || !ws || ws.readyState !== WebSocket.OPEN) return;
+      const video = videoRef.current;
+      if (!video || video.readyState < 2 || !video.videoWidth) return;
+
+      isDetecting = true;
+      screenState = 'DETECTING';
+      setStatus(reason === 'init' ? '🔍 Initial scan...' : '🔍 Detecting screen...');
+
+      // Never stay stuck waiting for the server: give up after 8s and re-scan
+      clearWatchdog();
+      detectWatchdog = setTimeout(() => {
+        if (!isDetecting) return;
+        isDetecting = false;
+        baselineLuma = null; // forces a fresh scan on the next tick
+        setStatus('⚠️ Detect timeout, retrying...');
+      }, 8000);
+
+      sendFrameBlob();
+    };
+
+    forceDetectRef.current = () => triggerDetectNow('manual');
+
+    const monitorLoop = () => {
+      if (stopped || isDetecting || !ws || ws.readyState !== WebSocket.OPEN) return;
+      const video = videoRef.current;
+      if (!video || video.readyState < 2 || !video.videoWidth) return;
+
+      // 1. Guard against CNC mechanical motion: Ignore camera motion while CNC is active or during post-move cooldown
+      if (Date.now() < cncActiveUntilRef.current) {
+        setLiveStatus('🤖 CNC moving (Detection paused)');
+        stableStartTime = null;
+        screenState = 'STABLE';
+        justFinishedCncMotion = true;
+        return;
+      }
+
+      const currLuma = extractSampleLuma(video);
+      if (!currLuma) return;
+
+      // First run: detect initial targets & set baseline
+      if (!baselineLuma) {
+        prevLuma = currLuma;
+        triggerDetectNow('init');
+        return;
+      }
+
+      // If CNC motion just finished and toolhead is now clear, synchronize prevLuma to prevent false triggers
+      if (justFinishedCncMotion) {
+        justFinishedCncMotion = false;
+        prevLuma = currLuma;
+      }
+
+      const stepDiff = calcLumaDiff(currLuma, prevLuma);
+      prevLuma = currLuma;
+
+      // Case 1: Motion detected (screen transition or stylus actively moving)
+      if (stepDiff > MOTION_THRESHOLD) {
+        screenState = 'CHANGING';
+        stableStartTime = null;
+        setStatus('⚡ Screen changing...');
+        return;
+      }
+
+      // Case 1b: slow transitions (fades/animations) never exceed the per-step threshold,
+      // so also compare against the locked baseline while STABLE.
+      if (screenState === 'STABLE') {
+        const drift = analyzeBlockDiff(currLuma, baselineLuma);
+        if (drift.avgDiff >= MIN_SCREEN_CHANGE && drift.changedBlockRatio >= MIN_GLOBAL_BLOCK_RATIO) {
+          screenState = 'CHANGING';
+          stableStartTime = null;
+          setStatus('⚡ Screen changing...');
+          return;
+        }
+      }
+
+      // Case 2: Motion has paused / screen is currently stationary
+      if (screenState === 'CHANGING') {
+        const now = performance.now();
+        if (stableStartTime === null) {
+          stableStartTime = now;
+        }
+        const settledMs = Math.round(now - stableStartTime);
+        setStatus('⏳ Settling...');
+
+        if (settledMs >= SETTLE_DELAY_MS) {
+          // Stationary long enough: perform 64-block spatial analysis to distinguish global page transition from local stylus obstruction
+          const { avgDiff, changedBlockRatio, changedBlocks } = analyzeBlockDiff(currLuma, baselineLuma);
+
+          if (avgDiff >= MIN_SCREEN_CHANGE && changedBlockRatio >= MIN_GLOBAL_BLOCK_RATIO) {
+            // True global screen transition: drop the old overlay immediately, then detect the new page
+            setAiTargets([]);
+            setSelectedTargetId(null);
+            triggerDetectNow('screen_change');
+          } else if (avgDiff >= MIN_SCREEN_CHANGE && changedBlockRatio < MIN_GLOBAL_BLOCK_RATIO) {
+            // Localized obstruction (e.g. CNC toolhead / stylus resting at Key 6)
+            // Screen beneath remains the same -> DO NOT re-detect, maintain locked targets
+            screenState = 'STABLE';
+            setLiveStatus(`🔒 Locked · Stylus at key (${changedBlocks}/64 blocks, screen unchanged)`);
+          } else {
+            // Reverted back to the original screen (transient stylus pass / hand shadow has gone)
+            screenState = 'STABLE';
+            setLiveStatus((curr) => (curr.startsWith('🔒') ? curr : '🔒 Screen locked'));
+          }
+        }
+      }
+    };
+
+    const connect = () => {
+      if (stopped) return;
+      setLiveStatus('Connecting...');
+      ws = new WebSocket(`${API_BASE.replace(/^http/, 'ws')}/webcam/ws/live-detect`);
+
+      ws.onopen = () => {
+        setLiveStatus('Ready. Watching screen...');
+        clearInterval(checkInterval);
+        checkInterval = setInterval(monitorLoop, 120);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          clearWatchdog();
+          const data = JSON.parse(event.data);
+          if (data.error) {
+            setStatus(`Error: ${data.error}`);
+            isDetecting = false;
+            return;
+          }
+
+          const video = videoRef.current;
+          const nowLuma = video ? extractSampleLuma(video) : null;
+
+          // The page changed while the server was detecting -> result is for a stale screen. Discard it
+          // and let the monitor re-scan once the new screen settles.
+          if (sentLuma && nowLuma) {
+            const drift = analyzeBlockDiff(nowLuma, sentLuma);
+            if (drift.avgDiff >= MIN_SCREEN_CHANGE && drift.changedBlockRatio >= MIN_GLOBAL_BLOCK_RATIO) {
+              baselineLuma = sentLuma;
+              prevLuma = nowLuma;
+              screenState = 'CHANGING';
+              stableStartTime = null;
+              isDetecting = false;
+              setStatus('⚡ Screen changed during scan, re-scanning...');
+              return;
+            }
+          }
+
+          const finalTargets = (data.objects || []).map((obj, idx) => ({
+            ...obj,
+            id: idx + 1,
+            label: formatLabelToEnglish(obj.label),
+          }));
+          setAiTargets(finalTargets);
+          setSelectedTargetId(null);
+
+          // Lock new baseline after successful detection
+          if (nowLuma) {
+            baselineLuma = nowLuma;
+            prevLuma = nowLuma;
+          }
+          screenState = 'STABLE';
+          setStatus(`🔒 Locked · ${finalTargets.length} targets`);
+          isDetecting = false;
+        } catch {
+          /* ignore malformed message */
+          isDetecting = false;
+        }
+      };
+
+      ws.onclose = () => {
+        isDetecting = false;
+        clearWatchdog();
+        clearInterval(checkInterval);
+        if (stopped) return;
+        setLiveStatus('Reconnecting...');
+        retryTimer = setTimeout(connect, 1500);
+      };
+
+      ws.onerror = () => ws.close();
+    };
+
+    connect();
+
+    return () => {
+      stopped = true;
+      forceDetectRef.current = null;
+      clearInterval(checkInterval);
+      clearTimeout(retryTimer);
+      clearWatchdog();
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveDetect, runningSequence, isExecutingScript]);
+
+  // Re-scan current screen on demand (works for both live detect WebSocket and 1-shot API)
+  const handleReScanCurrentScreen = () => {
+    if (liveDetect && forceDetectRef.current) {
+      toast.loading('Re-scanning current screen with 2-pass consensus...', { id: 'rescan', duration: 1500 });
+      forceDetectRef.current();
+    } else {
+      handleRunAiDetection();
+    }
+  };
+
+  // Smart Auto-Fill for Missing Keypad Numbers (1..9, 0) based on detected matrix grid spacing
+  const handleAutoFillMissingKeys = async () => {
+    if (!aiTargets || aiTargets.length < 2) {
+      toast.error('Need at least 2 detected numeric keys to deduce keypad grid geometry!');
+      return;
+    }
+
+    const keyGridMap = {
+      1: { r: 0, c: 0 },
+      2: { r: 0, c: 1 },
+      3: { r: 0, c: 2 },
+      4: { r: 1, c: 0 },
+      5: { r: 1, c: 1 },
+      6: { r: 1, c: 2 },
+      7: { r: 2, c: 0 },
+      8: { r: 2, c: 1 },
+      9: { r: 2, c: 2 },
+      0: { r: 3, c: 1 },
+    };
+
+    const existingDigits = {};
+    for (const t of aiTargets) {
+      const m = (t.label || '').match(/(?:key|phim|nut|nút|phím|số)?\s*([0-9])\b/i);
+      if (m && keyGridMap[m[1]] !== undefined) {
+        existingDigits[m[1]] = t;
+      }
+    }
+
+    const foundDigits = Object.keys(existingDigits).map(Number);
+    if (foundDigits.length < 2) {
+      toast.error('Not enough numeric keys (0-9) detected to compute keypad matrix.');
+      return;
+    }
+
+    let colDeltaX = 0;
+    let colDeltaY = 0;
+    let colDeltaCount = 0;
+
+    let rowDeltaX = 0;
+    let rowDeltaY = 0;
+    let rowDeltaCount = 0;
+
+    // Calculate column step and row step from all matching pairs
+    for (let i = 0; i < foundDigits.length; i += 1) {
+      for (let j = i + 1; j < foundDigits.length; j += 1) {
+        const d1 = foundDigits[i];
+        const d2 = foundDigits[j];
+        const p1 = keyGridMap[d1];
+        const p2 = keyGridMap[d2];
+        const t1 = existingDigits[d1];
+        const t2 = existingDigits[d2];
+
+        const dc = p2.c - p1.c;
+        const dr = p2.r - p1.r;
+
+        // Same row, different columns
+        if (dr === 0 && dc !== 0) {
+          colDeltaX += (t2.pixel_x - t1.pixel_x) / dc;
+          colDeltaY += (t2.pixel_y - t1.pixel_y) / dc;
+          colDeltaCount += 1;
+        }
+        // Same column, different rows
+        if (dc === 0 && dr !== 0) {
+          rowDeltaX += (t2.pixel_x - t1.pixel_x) / dr;
+          rowDeltaY += (t2.pixel_y - t1.pixel_y) / dr;
+          rowDeltaCount += 1;
+        }
+      }
+    }
+
+    // Fallback if no exact same-row/column pair exists
+    const avgW = aiTargets.reduce((s, t) => s + (t.width || 44), 0) / aiTargets.length;
+    const avgH = aiTargets.reduce((s, t) => s + (t.height || 44), 0) / aiTargets.length;
+
+    if (colDeltaCount > 0) {
+      colDeltaX /= colDeltaCount;
+      colDeltaY /= colDeltaCount;
+    } else {
+      colDeltaX = avgW * 1.45;
+      colDeltaY = 0;
+    }
+
+    if (rowDeltaCount > 0) {
+      rowDeltaX /= rowDeltaCount;
+      rowDeltaY /= rowDeltaCount;
+    } else {
+      rowDeltaX = 0;
+      rowDeltaY = avgH * 1.45;
+    }
+
+    // Anchor point from first found digit
+    const anchorDigit = foundDigits[0];
+    const anchorTarget = existingDigits[anchorDigit];
+    const anchorGrid = keyGridMap[anchorDigit];
+
+    const activeWorkArea = (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : savedWorkArea);
+    const missingDigits = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0].filter((d) => !existingDigits[d]);
+
+    if (missingDigits.length === 0) {
+      toast.success('Keypad already contains all numeric keys 0-9!');
+      return;
+    }
+
+    const toastId = toast.loading(`Auto-calculating coordinates for ${missingDigits.length} missing keys...`);
+    const newItems = [];
+    let nextId = Math.max(...aiTargets.map((t) => t.id || 0), 0) + 1;
+
+    for (const d of missingDigits) {
+      const g = keyGridMap[d];
+      const dc = g.c - anchorGrid.c;
+      const dr = g.r - anchorGrid.r;
+      const px = Math.round(anchorTarget.pixel_x + dc * colDeltaX + dr * rowDeltaX);
+      const py = Math.round(anchorTarget.pixel_y + dc * colDeltaY + dr * rowDeltaY);
+
+      try {
+        const res = await axios.post(`${API_BASE}/webcam/map-pixel`, {
+          pixel_x: px,
+          pixel_y: py,
+          work_area: activeWorkArea,
+          origin_x: originX,
+          origin_y: originY,
+          camera_offset_x: cameraOffsetX,
+          camera_offset_y: cameraOffsetY,
+          cnc_width: cncWidth,
+          cnc_height: cncHeight,
+        });
+
+        newItems.push({
+          id: nextId++,
+          label: `Key ${d}`,
+          pixel_x: px,
+          pixel_y: py,
+          cnc_x: res.data.cnc_x,
+          cnc_y: res.data.cnc_y,
+          width: anchorTarget.width || 44,
+          height: anchorTarget.height || 44,
+          confidence: 0.9,
+          autoFilled: true,
+          box_polygon: [
+            [px - 22, py - 22],
+            [px + 22, py - 22],
+            [px + 22, py + 22],
+            [px - 22, py + 22],
+          ],
+        });
+      } catch (err) {
+        console.error(`Map pixel error for Key ${d}:`, err);
+      }
+    }
+
+    if (newItems.length > 0) {
+      setAiTargets((prev) => [...prev, ...newItems]);
+      toast.success(`✨ Auto-filled ${newItems.length} missing keys (${newItems.map((i) => i.label).join(', ')})!`, { id: toastId });
+    } else {
+      toast.error('Could not auto-fill missing keys.', { id: toastId });
+    }
+  };
 
   // Automatically connect to Arduino COM port before CNC execution
   const ensureArduinoConnected = async () => {
@@ -841,6 +1455,7 @@ const WebcamOcrPanel = ({
       }
     }
     setRunningSequence(false);
+    markCncMoving(2200);
     await refreshCncStatus();
     toast.success('Sequence execution completed!');
   };
@@ -1036,6 +1651,7 @@ const WebcamOcrPanel = ({
     } finally {
       setRunningSequence(false);
       setCurrentExecutingStep(null);
+      markCncMoving(2200);
     }
   };
 
@@ -1632,6 +2248,41 @@ const WebcamOcrPanel = ({
               </span>
             </button>
 
+            {/* Auto-Detect on Screen Change toggle + Quick Re-scan */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setLiveDetect((v) => !v)}
+                className={`flex-1 flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer ${liveDetect
+                  ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-300'
+                  : 'border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-white'
+                  }`}
+                title="Tự động theo dõi màn hình điện thoại, chỉ nhận diện khi chuyển trang và khóa cố định vị trí các nút (không bị nhảy tọa độ)"
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className={`w-2.5 h-2.5 rounded-full ${liveDetect ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                  <div>
+                    <div className="text-xs font-bold text-slate-800">Detect on Screen Change</div>
+                    <div className="text-[10px] text-slate-500">Tự nhận diện khi đổi trang & khóa vị trí</div>
+                  </div>
+                </div>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${liveDetect ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                  {liveDetect ? (liveStatus || 'ACTIVE') : 'OFF'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleReScanCurrentScreen}
+                disabled={busy}
+                className="px-3 py-3 rounded-xl border border-sky-200 bg-sky-50 hover:bg-sky-100 text-sky-700 flex flex-col items-center justify-center transition-all cursor-pointer shadow-xs hover:shadow-sm"
+                title="Quét lại ngay màn hình hiện tại (Re-scan 2-Pass Consensus)"
+              >
+                <span className="text-xs">⚡</span>
+                <span className="text-[9px] font-bold whitespace-nowrap">Re-Scan</span>
+              </button>
+            </div>
+
             {/* Step 3: Execute CNC Automation */}
             {!runningSequence ? (
               <button
@@ -1896,10 +2547,22 @@ const WebcamOcrPanel = ({
             <label>
               AI Model
               <select value={aiModel} onChange={(e) => setAiModel(e.target.value)} disabled={busy}>
+                <option value="yolo">YOLO Custom Model (Offline - best.pt)</option>
                 <option value="gpt4o">OpenAI GPT-4o (High Precision Vision)</option>
                 <option value="gpt4o-mini">OpenAI GPT-4o-mini (Fast & Cheap)</option>
                 <option value="opencv">OpenCV Contours & Shapes (Offline 0ms)</option>
-                <option value="yolo">YOLO Custom Model (Offline - phone.pt)</option>
+              </select>
+            </label>
+            <label>
+              Kiểu hiển thị
+              <select
+                value={overlayMode}
+                onChange={(e) => handleSetOverlayMode(e.target.value)}
+                disabled={busy}
+              >
+                <option value="box">📦 Bounding Box</option>
+                <option value="circle">⭕ Khung tròn đánh số</option>
+                <option value="both">🔲 Cả hai (Box + Tròn)</option>
               </select>
             </label>
           </div>
@@ -2243,10 +2906,85 @@ const WebcamOcrPanel = ({
           <div
             className="vision-preview-shell"
             onClick={handleArbitraryPointClick}
-            style={{ cursor: (activeTab === 'roi' && calibrationMode) ? 'crosshair' : 'pointer' }}
+            style={{ cursor: ((activeTab === 'roi' && calibrationMode) || addCustomTargetMode) ? 'crosshair' : 'pointer' }}
           >
+            {addCustomTargetMode && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '12px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  zIndex: 60,
+                  backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                  color: '#38bdf8',
+                  border: '1px solid #38bdf8',
+                  padding: '8px 16px',
+                  borderRadius: '10px',
+                  fontSize: '12px',
+                  fontWeight: 'bold',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  backdropFilter: 'blur(6px)',
+                }}
+              >
+                <span>📍 Click anywhere on camera preview to place missing element</span>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setAddCustomTargetMode(false); }}
+                  style={{
+                    backgroundColor: '#ef4444',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '6px',
+                    padding: '3px 8px',
+                    fontSize: '11px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
             <video ref={videoRef} autoPlay muted playsInline />
             
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                const next = overlayMode === 'box' ? 'circle' : overlayMode === 'circle' ? 'both' : 'box';
+                handleSetOverlayMode(next);
+              }}
+              style={{
+                position: 'absolute',
+                top: '10px',
+                right: '120px',
+                zIndex: 50,
+                backgroundColor: 'rgba(15, 23, 42, 0.75)',
+                color: 'white',
+                border: '1px solid rgba(255, 255, 255, 0.25)',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                backdropFilter: 'blur(4px)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+                transition: 'all 0.2s ease-in-out'
+              }}
+              title="Chuyển đổi kiểu hiển thị: Bounding Box / Khung tròn số / Cả hai"
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.9)'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.75)'}
+            >
+              {overlayMode === 'box' ? '📦 Bounding Box' : overlayMode === 'circle' ? '⭕ Khung tròn số' : '🔲 Box + Tròn'}
+            </button>
+
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); handleSaveSnapshot(); }}
@@ -2297,7 +3035,7 @@ const WebcamOcrPanel = ({
             )}
 
             {/* SVG Polygon Overlay connecting the 4 Corners & Target Boxes */}
-            {(calibrationPoints.length >= 2 || savedWorkArea || aiTargets.length > 0) && (
+            {(calibrationPoints.length >= 2 || savedWorkArea || (overlayMode !== 'circle' && aiTargets.length > 0)) && (
               <svg className="vision-svg-overlay" viewBox={`0 0 ${frameWidth} ${frameHeight}`} preserveAspectRatio="none">
                 {(calibrationPoints.length >= 2 || savedWorkArea) && (
                   <polygon
@@ -2305,11 +3043,17 @@ const WebcamOcrPanel = ({
                     className="vision-roi-polygon"
                   />
                 )}
-                {aiTargets.map((t) => t.box_polygon && (
+                {overlayMode !== 'circle' && aiTargets.map((t) => t.box_polygon && (
                   <polygon
                     key={`box-poly-${t.id}`}
                     points={t.box_polygon.map((p) => `${p[0]},${p[1]}`).join(' ')}
                     className={`vision-ai-box-poly ${selectedTargetId === t.id ? 'vision-ai-box-poly--selected' : ''}`}
+                    style={{ pointerEvents: 'auto', cursor: 'pointer' }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedTargetId(t.id);
+                      handleMoveToCncTarget(t);
+                    }}
                   />
                 ))}
               </svg>
@@ -2344,11 +3088,33 @@ const WebcamOcrPanel = ({
               );
             })}
 
+            {/* YOLO-style box labels: "label conf" at the top-left corner of each box */}
+            {overlayMode !== 'circle' && aiTargets.map((t) => {
+              if (!t.box_polygon) return null;
+              const minX = Math.min(...t.box_polygon.map((p) => p[0]));
+              const minY = Math.min(...t.box_polygon.map((p) => p[1]));
+              return (
+                <div
+                  key={`box-label-${t.id}`}
+                  className={`vision-ai-box-label ${selectedTargetId === t.id ? 'vision-ai-box-label--selected' : ''}`}
+                  style={{ left: `${(minX / frameWidth) * 100}%`, top: `${(minY / frameHeight) * 100}%`, pointerEvents: 'auto', cursor: 'pointer' }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedTargetId(t.id);
+                    handleMoveToCncTarget(t);
+                  }}
+                >
+                  {formatLabelToEnglish(t.label)} {Number(t.confidence || 0).toFixed(2)}
+                </div>
+              );
+            })}
+
             {/* AI Detected Objects Overlays */}
             {aiTargets.map((target) => {
               const xPercent = (target.pixel_x / frameWidth) * 100;
               const yPercent = (target.pixel_y / frameHeight) * 100;
               const isSelected = selectedTargetId === target.id;
+              const showCircle = overlayMode === 'circle' || overlayMode === 'both';
               return (
                 <button
                   type="button"
@@ -2377,15 +3143,22 @@ const WebcamOcrPanel = ({
                     }
                     handleMoveToCncTarget(target);
                   }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleDeleteTarget(target.id);
+                  }}
                   title={`#${target.id} ${formatLabelToEnglish(target.label)} → CNC (${target.cnc_x}, ${target.cnc_y}) — drag to reposition, click to move stylus`}
                 >
-                  <div className="vision-ai-dot">
+                  <div className="vision-ai-dot" style={{ opacity: showCircle ? 1 : 0 }}>
                     <span className="vision-ai-dot-num">{target.id}</span>
                   </div>
-                  <div className="vision-ai-tag">
-                    <strong>#{target.id} {formatLabelToEnglish(target.label)}</strong>
-                    <span>X:{target.cnc_x} Y:{target.cnc_y}</span>
-                  </div>
+                  {showCircle && (
+                    <div className="vision-ai-tag">
+                      <strong>#{target.id} {formatLabelToEnglish(target.label)}</strong>
+                      <span>X:{target.cnc_x} Y:{target.cnc_y}</span>
+                    </div>
+                  )}
                 </button>
               );
             })}
@@ -2533,40 +3306,90 @@ const WebcamOcrPanel = ({
           <div className="vision-targets-tray__header">
             <h4>DETECTED SCREEN ELEMENTS ({aiTargets.length})</h4>
             <span className="vision-targets-tray__hint">Click on an element to move stylus toolhead directly to it</span>
-            {/* {onSendToAiStudio && (
+
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
               <button
                 type="button"
-                onClick={() => onSendToAiStudio(aiTargets)}
+                onClick={handleReScanCurrentScreen}
+                disabled={busy}
                 className="webcam-ocr-button"
                 style={{
-                  marginLeft: 'auto',
-                  background: 'linear-gradient(135deg, #fe5d70 0%, #fe9365 100%)',
+                  background: 'linear-gradient(135deg, #0284c7 0%, #38bdf8 100%)',
                   color: '#ffffff',
                   fontWeight: 700,
-                  padding: '0.35rem 0.85rem',
-                  fontSize: '0.75rem',
+                  padding: '0.25rem 0.65rem',
+                  fontSize: '0.72rem',
                   borderRadius: '6px',
                   border: 'none',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '5px',
-                  boxShadow: '0 2px 8px rgba(254, 93, 112, 0.35)'
+                  gap: '4px',
+                  boxShadow: '0 2px 6px rgba(2, 132, 199, 0.25)',
                 }}
-                title="Send all detected targets and CNC coordinates to AI Test Studio to generate automated script"
+                title="Quét lại ngay màn hình hiện tại (Multi-Pass Consensus)"
               >
-                Send to AI Test Studio ({aiTargets.length})
+                ⚡ Re-Scan Now
               </button>
-            )} */}
-            <button
-              type="button"
-              onClick={() => setAiTargets([])}
-              className="webcam-ocr-button webcam-ocr-button--quiet"
-              style={{ marginLeft: onSendToAiStudio ? '8px' : 'auto', padding: '0.2rem 0.6rem', fontSize: '0.72rem' }}
-              title="Clear detected elements list"
-            >
-              Clear List
-            </button>
+
+              <button
+                type="button"
+                onClick={handleAutoFillMissingKeys}
+                disabled={busy}
+                className="webcam-ocr-button"
+                style={{
+                  background: 'linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%)',
+                  color: '#ffffff',
+                  fontWeight: 700,
+                  padding: '0.25rem 0.65rem',
+                  fontSize: '0.72rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  boxShadow: '0 2px 6px rgba(139, 92, 246, 0.25)',
+                }}
+                title="Tự động suy luận ma trận bàn phím và bù các phím số (1-9, 0) còn thiếu"
+              >
+                ✨ Auto-Fill Keys
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAddCustomTargetMode((v) => !v)}
+                disabled={busy}
+                className="webcam-ocr-button"
+                style={{
+                  background: addCustomTargetMode ? '#ef4444' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  color: '#ffffff',
+                  fontWeight: 700,
+                  padding: '0.25rem 0.65rem',
+                  fontSize: '0.72rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  boxShadow: '0 2px 6px rgba(16, 185, 129, 0.25)',
+                }}
+                title="Bật chế độ nhấp chuột vào camera để thêm nút thủ công"
+              >
+                {addCustomTargetMode ? '✕ Cancel' : '+ Add Target'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAiTargets([])}
+                className="webcam-ocr-button webcam-ocr-button--quiet"
+                style={{ padding: '0.25rem 0.55rem', fontSize: '0.72rem' }}
+                title="Clear detected elements list"
+              >
+                Clear
+              </button>
+            </div>
           </div>
           <div className="vision-targets-grid">
             {aiTargets.map((target) => (
@@ -2579,6 +3402,17 @@ const WebcamOcrPanel = ({
                   <span className="vision-target-card__id">#{target.id}</span>
                   <span className="vision-target-card__label">{formatLabelToEnglish(target.label)}</span>
                   <span className="vision-target-card__conf">{Math.round(target.confidence * 100)}%</span>
+                  <button
+                    type="button"
+                    title="Delete this item"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteTarget(target.id);
+                    }}
+                    style={{ marginLeft: 'auto', background: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: '6px', width: '22px', height: '22px', lineHeight: '1', cursor: 'pointer', fontWeight: 800 }}
+                  >
+                    ×
+                  </button>
                 </div>
                 <div className="vision-target-card__coords" style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                   <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '6px', padding: '4px 8px', color: '#166534', fontSize: '0.85rem', fontWeight: 800 }}>

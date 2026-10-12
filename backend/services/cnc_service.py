@@ -16,6 +16,9 @@ class CNCService:
             "current_y": cnc.current_y,
             "current_a": cnc.current_a,
             "a_press_steps": cnc.a_press_steps,
+            "press_use_solenoid": cnc.press_use_solenoid,
+            "press_solenoid_index": cnc.press_solenoid_index,
+            "press_solenoid_delay_ms": cnc.press_solenoid_delay_ms,
             "config": {
                 "x1": cnc.x1,
                 "y1": cnc.y1,

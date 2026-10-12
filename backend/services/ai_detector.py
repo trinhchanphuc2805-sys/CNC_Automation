@@ -50,7 +50,77 @@ def get_yolo_model():
     return _yolo_model
 
 
+YOLO_ELEMENT_MODEL_PATH = Path(__file__).resolve().parents[2] / "model" / "best.pt"
+_yolo_element_model = None
+YOLO_PHONE_IMGSZ = 640    # kích thước ảnh đầu vào cho phone.pt
+YOLO_ELEMENT_IMGSZ = 640  # tăng (vd 800/960) nếu cần bắt phím nhỏ hơn, đổi lại chậm hơn
+DEVICE_CACHE_TTL = 2.0    # giây: dùng lại vị trí thiết bị, bỏ qua phone.pt giữa các lần quét liên tiếp
+YOLO_USE_DEVICE_CROP = False  # False: best.pt chạy trên toàn khung hình (giống notebook). True: cắt theo phone.pt trước
+
+
+def _infer_kwargs() -> Dict[str, Any]:
+    """Dùng GPU + FP16 nếu có CUDA, ngược lại chạy CPU."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return {"device": 0, "half": True}
+    except Exception:
+        pass
+    return {"device": "cpu"}
+
+
+def get_yolo_element_model():
+    global _yolo_element_model
+    if _yolo_element_model is None:
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            raise RuntimeError("ultralytics is not installed. Vui lòng cài đặt: pip install ultralytics")
+        if not YOLO_ELEMENT_MODEL_PATH.exists():
+            raise RuntimeError(f"Không tìm thấy model YOLO tại {YOLO_ELEMENT_MODEL_PATH}")
+        _yolo_element_model = YOLO(str(YOLO_ELEMENT_MODEL_PATH))
+    return _yolo_element_model
+
+
 class AIDetectorService:
+    def detect_yolo_fast(
+        self,
+        frame: np.ndarray,
+        work_area: Optional[List[List[float]]] = None,
+        cnc_origin: Tuple[float, float] = (0.0, 0.0),
+        cnc_span: Tuple[float, float] = (300.0, 300.0),
+        camera_offset: Tuple[float, float] = (0.0, 0.0),
+        scale: float = 1.0,
+    ) -> List[Dict[str, Any]]:
+        """Realtime YOLO running best.pt directly on full frame (identical to user's Python snippet)."""
+        infer_kw = _infer_kwargs()
+        elem_model = get_yolo_element_model()
+        res_el = elem_model.predict(frame, conf=0.25, verbose=False, **infer_kw)[0]
+
+        objects: List[Dict[str, Any]] = []
+        for box in sorted(res_el.boxes, key=lambda b: -float(b.conf[0])):
+            ex1, ey1, ex2, ey2 = box.xyxy[0].tolist()
+            ex1, ex2, ey1, ey2 = ex1 * scale, ex2 * scale, ey1 * scale, ey2 * scale
+            label = elem_model.names[int(box.cls[0])]
+            cx, cy = (ex1 + ex2) / 2.0, (ey1 + ey2) / 2.0
+            cnc_x, cnc_y = self._map_to_cnc(cx, cy, cnc_origin, cnc_span, work_area)
+            objects.append({
+                "id": len(objects) + 1,
+                "label": label,
+                "confidence": round(float(box.conf[0]), 2),
+                "pixel_x": round(cx, 1),
+                "pixel_y": round(cy, 1),
+                "cnc_x": round(cnc_x + camera_offset[0], 1),
+                "cnc_y": round(cnc_y + camera_offset[1], 1),
+                "width": round(ex2 - ex1, 1),
+                "height": round(ey2 - ey1, 1),
+                "box_polygon": [
+                    [round(ex1, 1), round(ey1, 1)], [round(ex2, 1), round(ey1, 1)],
+                    [round(ex2, 1), round(ey2, 1)], [round(ex1, 1), round(ey2, 1)],
+                ],
+            })
+        return objects
+
     def detect_in_region(
         self,
         frame: np.ndarray,
@@ -76,47 +146,43 @@ class AIDetectorService:
         try:
             m_type = (model_type or "gpt4o").lower().strip()
             if m_type == "yolo":
-                # --- Nhận diện bằng YOLO ---
-                model = get_yolo_model()
-                results_yolo = model(frame, conf=0.3, verbose=False)
+                # --- Chạy best.pt trực tiếp trên ảnh gốc (Full Frame, y hệt snippet) ---
+                elem_model = get_yolo_element_model()
+                infer_kw = _infer_kwargs()
+                results_yolo = elem_model.predict(frame, conf=0.25, verbose=False, **infer_kw)
                 annotated_frame = results_yolo[0].plot()
 
-                for result in results_yolo:
-                    for idx, box in enumerate(result.boxes):
-                        x1, y1, x2, y2 = box.xyxy[0].tolist()
-                        conf = float(box.conf[0])
-                        cls = int(box.cls[0])
-                        label = model.names[cls]
+                for idx, box in enumerate(results_yolo[0].boxes, start=1):
+                    ex1, ey1, ex2, ey2 = box.xyxy[0].tolist()
+                    conf = float(box.conf[0])
+                    label = elem_model.names[int(box.cls[0])]
 
-                        width = x2 - x1
-                        height = y2 - y1
-                        center_x = x1 + width / 2.0
-                        center_y = y1 + height / 2.0
+                    width = ex2 - ex1
+                    height = ey2 - ey1
+                    center_x = ex1 + width / 2.0
+                    center_y = ey1 + height / 2.0
 
-                        # Ánh xạ sang tọa độ CNC
-                        cnc_x, cnc_y = self._map_to_cnc(center_x, center_y, cnc_origin, cnc_span, work_area)
-                        cnc_x += camera_offset[0]
-                        cnc_y += camera_offset[1]
+                    cnc_x, cnc_y = self._map_to_cnc(center_x, center_y, cnc_origin, cnc_span, work_area)
+                    cnc_x += camera_offset[0]
+                    cnc_y += camera_offset[1]
 
-                        box_polygon = [
-                            [round(x1, 1), round(y1, 1)],
-                            [round(x2, 1), round(y1, 1)],
-                            [round(x2, 1), round(y2, 1)],
-                            [round(x1, 1), round(y2, 1)],
-                        ]
-
-                        processed_objects.append({
-                            "id": idx + 1,
-                            "label": label,
-                            "confidence": round(conf, 2),
-                            "pixel_x": round(center_x, 1),
-                            "pixel_y": round(center_y, 1),
-                            "cnc_x": round(cnc_x, 1),
-                            "cnc_y": round(cnc_y, 1),
-                            "width": round(width, 1),
-                            "height": round(height, 1),
-                            "box_polygon": box_polygon,
-                        })
+                    processed_objects.append({
+                        "id": idx,
+                        "label": label,
+                        "confidence": round(conf, 2),
+                        "pixel_x": round(center_x, 1),
+                        "pixel_y": round(center_y, 1),
+                        "cnc_x": round(cnc_x, 1),
+                        "cnc_y": round(cnc_y, 1),
+                        "width": round(width, 1),
+                        "height": round(height, 1),
+                        "box_polygon": [
+                            [round(ex1, 1), round(ey1, 1)],
+                            [round(ex2, 1), round(ey1, 1)],
+                            [round(ex2, 1), round(ey2, 1)],
+                            [round(ex1, 1), round(ey2, 1)],
+                        ],
+                    })
             elif m_type == "opencv":
                 raw_targets = self._detect_opencv_shapes(frame)
                 for idx, t in enumerate(raw_targets):
@@ -280,6 +346,14 @@ class AIDetectorService:
             elif "RateLimitError" in type(exc).__name__ or "insufficient_quota" in err_msg.lower():
                 err_msg = "OpenAI API Key đã hết lượt sử dụng (quota) hoặc bị rate limit."
             return {"success": False, "message": err_msg, "image": None, "warped_preview": None, "objects": []}
+
+    @staticmethod
+    def _iou(a, b) -> float:
+        ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+        ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+        return inter / union if union > 0 else 0.0
 
     def _detect_opencv_shapes(self, image: np.ndarray) -> List[Dict[str, Any]]:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)

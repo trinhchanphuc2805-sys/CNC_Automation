@@ -8,6 +8,7 @@ from schemas import (
     ManualMoveRequest,
     MovePenToPixelRequest,
     MoveToCncRequest,
+    PressConfigRequest,
     SequenceRequest,
     SpeedRequest,
     SolenoidRequest,
@@ -102,6 +103,22 @@ def set_a_steps(req: AStepsRequest, service: CNCService = Depends(get_service)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
  
  
+@router.post("/press-config")
+def set_press_config(req: PressConfigRequest, service: CNCService = Depends(get_service)):
+    cnc = service.controller
+    try:
+        cnc.set_press_config(req.steps, req.use_solenoid, req.solenoid_index, req.solenoid_delay_ms)
+        return {
+            "status": "success",
+            "a_press_steps": cnc.a_press_steps,
+            "press_use_solenoid": cnc.press_use_solenoid,
+            "press_solenoid_index": cnc.press_solenoid_index,
+            "press_solenoid_delay_ms": cnc.press_solenoid_delay_ms,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/move")
 def manual_move(req: ManualMoveRequest, service: CNCService = Depends(get_service)):
     if not service.controller.is_connected():

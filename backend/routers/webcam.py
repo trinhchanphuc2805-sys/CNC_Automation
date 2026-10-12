@@ -1,4 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+import json
+
+import cv2
+import numpy as np
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 
 from schemas import (
     AiDetectRequest,
@@ -158,6 +163,67 @@ def ai_detect(request: AiDetectRequest, service: CNCService = Depends(get_servic
         api_key=request.api_key,
     )
     return result
+
+
+@router.websocket("/ws/live-detect")
+async def live_detect_ws(ws: WebSocket, service: CNCService = Depends(get_service)):
+    """Realtime YOLO over WebSocket.
+
+    Protocol: client sends a JSON text message with config
+      {orig_width, work_area, origin_x, origin_y, cnc_width, cnc_height, camera_offset_x, camera_offset_y}
+    (may be re-sent anytime to update), then binary JPEG frames. For each frame the server
+    replies {"objects": [...], "ms": float}. The client sends the next frame after each reply."""
+    await ws.accept()
+    controller = service.controller
+    cfg: dict = {}
+    try:
+        while True:
+            msg = await ws.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+            if msg.get("text") is not None:
+                try:
+                    cfg = json.loads(msg["text"])
+                except ValueError:
+                    pass
+                continue
+            data = msg.get("bytes")
+            if not data:
+                continue
+
+            def _run():
+                import time
+                t0 = time.perf_counter()
+                frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+                if frame is None:
+                    return {"objects": [], "error": "bad frame"}
+                orig_w = float(cfg.get("orig_width") or frame.shape[1])
+                scale = orig_w / frame.shape[1]
+                ox = cfg.get("origin_x")
+                oy = cfg.get("origin_y")
+                origin = (float(ox if ox is not None else controller.x1), float(oy if oy is not None else controller.y1))
+                cw, ch = cfg.get("cnc_width"), cfg.get("cnc_height")
+                if cw and ch:
+                    span = (float(cw), float(ch))
+                else:
+                    span = (max(1.0, controller.MAX_COL * controller.spach_x), max(1.0, controller.MAX_ROW * controller.spach_y))
+                objs = ai_detector_service.detect_yolo_fast(
+                    frame,
+                    work_area=cfg.get("work_area"),
+                    cnc_origin=origin,
+                    cnc_span=span,
+                    camera_offset=(float(cfg.get("camera_offset_x") or 0), float(cfg.get("camera_offset_y") or 0)),
+                    scale=scale,
+                )
+                return {"objects": objs, "ms": round((time.perf_counter() - t0) * 1000, 1)}
+
+            try:
+                result = await asyncio.to_thread(_run)
+            except Exception as exc:  # model missing etc.
+                result = {"objects": [], "error": str(exc)}
+            await ws.send_json(result)
+    except WebSocketDisconnect:
+        pass
 
 
 @router.post("/map-pixel")
