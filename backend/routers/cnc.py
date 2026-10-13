@@ -8,6 +8,7 @@ from schemas import (
     ManualMoveRequest,
     MovePenToPixelRequest,
     MoveToCncRequest,
+    ParkRequest,
     PressConfigRequest,
     SequenceRequest,
     SpeedRequest,
@@ -86,6 +87,30 @@ def go_to_origin(service: CNCService = Depends(get_service)):
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/park")
+def park_cnc(req: ParkRequest, service: CNCService = Depends(get_service)):
+    if not service.controller.is_connected():
+        raise HTTPException(status_code=400, detail="Arduino is not connected. Connect a COM port first.")
+    try:
+        # Lift A if currently displaced downward (negative A)
+        if req.lift_a and getattr(service.controller, "current_a", 0) < 0:
+            retract_steps = abs(service.controller.current_a)
+            service.controller.move_manual('A', retract_steps)
+
+        # Move X & Y to park coordinate
+        service.controller.move_to_coordinate(req.target_x, req.target_y)
+        return {
+            "status": "success",
+            "message": f"CNC parked at ({round(req.target_x, 1)}, {round(req.target_y, 1)})",
+            "current_x": service.controller.current_x,
+            "current_y": service.controller.current_y,
+        }
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
  
  
 @router.post("/a-origin")

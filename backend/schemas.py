@@ -226,3 +226,18 @@ class MovePenToPixelRequest(BaseModel):
     press_steps: Optional[int] = None
 
 
+class ParkRequest(BaseModel):
+    target_x: float
+    target_y: float
+    lift_a: bool = True
+
+
+class SetupLockRequest(BaseModel):
+    work_area: Optional[list[list[float]]] = None
+    park_coordinate: Optional[dict] = None
+    targets: list[dict] = []
+    snapshot: Optional[str] = None
+    is_locked: bool = True
+
+
+

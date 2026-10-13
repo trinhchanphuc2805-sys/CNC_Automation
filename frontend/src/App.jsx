@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Toaster } from 'react-hot-toast';
 import Sidebar from './components/layout/Sidebar';
 import TopHeader from './components/layout/TopHeader';
@@ -9,6 +9,105 @@ import SettingsTab from './components/SettingsTab';
 function App() {
   const [activeTab, setActiveTab] = useState('ai-studio');
   const [isConnected, setIsConnected] = useState(false);
+
+  // Centralized Camera Management (Single stream shared across tabs to eliminate lag and driver locking)
+  const [sharedStream, setSharedStream] = useState(null);
+  const [cameras, setCameras] = useState([]);
+  const [selectedCameraId, setSelectedCameraId] = useState('');
+  const [cameraError, setCameraError] = useState('');
+  const [isCameraActive, setIsCameraActive] = useState(true);
+  const streamRef = useRef(null);
+
+  // Enumerate cameras once
+  const refreshCameraList = useCallback(async () => {
+    try {
+      if (!navigator.mediaDevices?.enumerateDevices) return [];
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevs = devices
+        .filter((d) => d.kind === 'videoinput')
+        .map((d, i) => ({
+          deviceId: d.deviceId,
+          label: d.label || `Camera ${i + 1}`,
+        }));
+      setCameras(videoDevs);
+      return videoDevs;
+    } catch {
+      return [];
+    }
+  }, []);
+
+  // Start single camera stream
+  const startCamera = useCallback(async (deviceId) => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('WebRTC Camera is unavailable in this browser.');
+      return;
+    }
+    try {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      const constraints = {
+        video: {
+          ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+          frameRate: { ideal: 30, max: 30 },
+        },
+        audio: false,
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+      setSharedStream(stream);
+      setCameraError('');
+
+      const available = await refreshCameraList();
+      if (!deviceId && available.length > 0) {
+        const preferred = available.find((c) => /iriun|usb|external|webcam|camera/i.test(c.label)) || available[0];
+        setSelectedCameraId(preferred.deviceId);
+      }
+    } catch (err) {
+      console.warn('Camera stream error:', err);
+      setCameraError(err.message || 'Unable to open camera');
+      setSharedStream(null);
+    }
+  }, [refreshCameraList]);
+
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    setSharedStream(null);
+    setIsCameraActive(false);
+  }, []);
+
+  const toggleCamera = useCallback(() => {
+    if (isCameraActive) {
+      stopCamera();
+    } else {
+      setIsCameraActive(true);
+      startCamera(selectedCameraId);
+    }
+  }, [isCameraActive, stopCamera, startCamera, selectedCameraId]);
+
+  const handleSelectCamera = useCallback((newId) => {
+    setSelectedCameraId(newId);
+    if (isCameraActive) {
+      startCamera(newId);
+    }
+  }, [isCameraActive, startCamera]);
+
+  useEffect(() => {
+    if (isCameraActive) {
+      startCamera(selectedCameraId);
+    }
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, []);
 
   // Shared test script state
   const [testScript, setTestScript] = useState([]);
@@ -135,11 +234,6 @@ function App() {
         {/* Main Body */}
         <main className="flex-1 p-5 md:p-8 overflow-y-auto space-y-6">
           {/* ===============================================================
-              4 ADMINTY KPI GRADIENT CARDS (English Labels)
-              =============================================================== */}
-
-
-          {/* ===============================================================
               TAB CONTENT SECTIONS
               =============================================================== */}
           {/* Tab 1: AI Test Studio */}
@@ -148,11 +242,20 @@ function App() {
               testScript={testScript}
               setTestScript={setTestScript}
               aiTargets={aiTargets}
+              setAiTargets={setAiTargets}
               onImportFromVision={handleSendTargetsToStudio}
               onExecuteTest={handleExecuteFromAiStudio}
               isExecuting={isExecutingScript}
               executionProgress={executionProgress}
               switchToVisionTab={() => setActiveTab('vision-alignment')}
+              sharedStream={sharedStream}
+              cameras={cameras}
+              selectedCameraId={selectedCameraId}
+              onSelectCamera={handleSelectCamera}
+              onRefreshCameras={refreshCameraList}
+              isCameraActive={isCameraActive}
+              onToggleCamera={toggleCamera}
+              cameraError={cameraError}
             />
           </div>
 
@@ -160,6 +263,7 @@ function App() {
           <div style={{ display: activeTab === 'vision-alignment' ? 'block' : 'none' }}>
             <WebcamOcrPanel
               activeTestScript={testScript}
+              setTestScript={setTestScript}
               aiTargets={aiTargets}
               setAiTargets={setAiTargets}
               onSendToAiStudio={handleSendTargetsToStudio}
@@ -167,6 +271,10 @@ function App() {
               onCompleteExecution={handleCompleteExecution}
               isExecutingScript={isExecutingScript}
               onSwitchToAiStudio={() => setActiveTab('ai-studio')}
+              sharedStream={sharedStream}
+              cameras={cameras}
+              cameraId={selectedCameraId}
+              setCameraId={handleSelectCamera}
             />
           </div>
 

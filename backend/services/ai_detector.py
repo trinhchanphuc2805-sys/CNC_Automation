@@ -82,7 +82,86 @@ def get_yolo_element_model():
     return _yolo_element_model
 
 
+def warmup_models() -> Dict[str, Any]:
+    """Preload YOLO models into memory and pre-warm OpenAI connection so first detect is instant."""
+    res = {
+        "yolo_element": False,
+        "phone": False,
+        "openai": False,
+        "openai_model": None,
+        "device": "cpu",
+        "error": None,
+    }
+    try:
+        elem_model = get_yolo_element_model()
+        if elem_model is not None:
+            dummy = np.zeros((320, 320, 3), dtype=np.uint8)
+            elem_model.predict(dummy, verbose=False, **_infer_kwargs())
+            res["yolo_element"] = True
+            res["device"] = _infer_kwargs().get("device", "cpu")
+            logger.info("YOLO element model (best.pt) warmed up successfully.")
+    except Exception as e:
+        logger.warning(f"Failed to warmup yolo element model: {e}")
+        res["error"] = str(e)
+
+    try:
+        if YOLO_MODEL_PATH.exists():
+            phone_model = get_yolo_model()
+            if phone_model is not None:
+                dummy = np.zeros((320, 320, 3), dtype=np.uint8)
+                phone_model.predict(dummy, verbose=False, **_infer_kwargs())
+                res["phone"] = True
+                logger.info("YOLO phone model (phone.pt) warmed up successfully.")
+    except Exception as e:
+        logger.warning(f"Failed to warmup phone model: {e}")
+
+    # Pre-warm OpenAI API HTTP session and model gpt-4o
+    try:
+        client = get_openai_client()
+        if client is not None:
+            try:
+                # Fast model ping to warm TCP/TLS connection & verify key
+                client.models.retrieve("gpt-4o")
+                res["openai"] = True
+                res["openai_model"] = "gpt-4o"
+                logger.info("OpenAI API client (GPT-4o) warmed up & verified successfully.")
+            except Exception as e_ping:
+                logger.warning(f"OpenAI retrieve gpt-4o warning: {e_ping}")
+                res["openai"] = True
+                res["openai_model"] = "gpt-4o (unverified ping)"
+    except Exception as e:
+        logger.info(f"OpenAI warmup skipped (no key or offline): {e}")
+
+    return res
+
+
+def get_model_status() -> Dict[str, Any]:
+    openai_ready = False
+    try:
+        openai_ready = bool(os.environ.get("OPENAI_API_KEY"))
+    except Exception:
+        pass
+
+    return {
+        "yolo_element_loaded": _yolo_element_model is not None,
+        "yolo_element_path": str(YOLO_ELEMENT_MODEL_PATH),
+        "yolo_element_exists": YOLO_ELEMENT_MODEL_PATH.exists(),
+        "phone_loaded": _yolo_model is not None,
+        "openai_ready": openai_ready,
+        "hybrid_ready": (_yolo_element_model is not None and openai_ready),
+        "device": _infer_kwargs().get("device", "cpu"),
+        "classes": _yolo_element_model.names if _yolo_element_model is not None else {0: "button", 1: "icon_app"},
+    }
+
+
+
 class AIDetectorService:
+    def warmup_models(self) -> Dict[str, Any]:
+        return warmup_models()
+
+    def get_model_status(self) -> Dict[str, Any]:
+        return get_model_status()
+
     def detect_yolo_fast(
         self,
         frame: np.ndarray,
@@ -144,8 +223,171 @@ class AIDetectorService:
         warped_annotated = None
 
         try:
-            m_type = (model_type or "gpt4o").lower().strip()
-            if m_type == "yolo":
+            m_type = (model_type or "hybrid").lower().strip()
+            if m_type in ("hybrid", "yolo_gpt4o", "yolo+gpt4o", "yolo_gpt"):
+                # --- HYBRID PIPELINE: YOLO (Toạ độ vật lý chuẩn 100%) + GPT-4o (Tên nhãn nút bấm) ---
+                elem_model = get_yolo_element_model()
+                infer_kw = _infer_kwargs()
+                results_yolo = elem_model.predict(frame, conf=0.18, verbose=False, **infer_kw)
+
+                yolo_raw_boxes = []
+                for box in results_yolo[0].boxes:
+                    ex1, ey1, ex2, ey2 = box.xyxy[0].tolist()
+                    bw, bh = ex2 - ex1, ey2 - ey1
+                    if bw < 10 or bh < 10:
+                        continue
+                    cx, cy = ex1 + bw / 2.0, ey1 + bh / 2.0
+                    yolo_raw_boxes.append({
+                        "x1": ex1, "y1": ey1, "x2": ex2, "y2": ey2,
+                        "center_x": cx, "center_y": cy,
+                        "width": bw, "height": bh,
+                        "confidence": float(box.conf[0]),
+                        "label": elem_model.names.get(int(box.cls[0]), "Button"),
+                    })
+
+                # 2. Run OpenAI GPT-4o to read semantic button names on screen
+                has_work_area = work_area is not None and len(work_area) == 4
+                inv_M = None
+                warped_img = None
+                is_cropped = False
+
+                if has_work_area:
+                    try:
+                        from services.vision_service import warp_perspective_region, order_corners
+                        ordered = order_corners(work_area)
+                        side_w = max(float(np.linalg.norm(ordered[1] - ordered[0])), float(np.linalg.norm(ordered[2] - ordered[3])))
+                        side_h = max(float(np.linalg.norm(ordered[3] - ordered[0])), float(np.linalg.norm(ordered[2] - ordered[1])))
+                        long_side = max(side_w, side_h, 1.0)
+                        s = 1024.0 / long_side
+                        out_w, out_h = max(64, int(side_w * s)), max(64, int(side_h * s))
+                        warped_img, M = warp_perspective_region(frame, ordered, (out_w, out_h))
+                        inv_M = np.linalg.inv(M)
+                        input_img = warped_img
+                        is_cropped = True
+                    except Exception as e:
+                        logger.warning("Failed to warp work area in hybrid, fallback to frame: %s", e)
+                        input_img = frame
+                        is_cropped = False
+                else:
+                    input_img = frame
+                    is_cropped = False
+
+                gpt_targets = []
+                try:
+                    gpt_raw = self._detect_chatgpt_vision(
+                        image=input_img,
+                        prompt=prompt or "ALL buttons, keypad keys 0-9, Cancel, Pay, Purchase, and icons on device screen",
+                        model_name="gpt4o",
+                        api_key=api_key,
+                        is_cropped_screen=is_cropped,
+                    )
+                    for gt in gpt_raw:
+                        xw1, yw1 = gt["x1"], gt["y1"]
+                        xw2, yw2 = gt["x2"], gt["y2"]
+                        if is_cropped and inv_M is not None:
+                            cx_w, cy_w = (xw1 + xw2) / 2.0, (yw1 + yw2) / 2.0
+                            pt_w = np.array([[[cx_w, cy_w]]], dtype=np.float32)
+                            pt_orig = cv2.perspectiveTransform(pt_w, inv_M)[0, 0]
+                            gpt_targets.append({
+                                "label": gt["label"],
+                                "confidence": gt.get("confidence", 0.95),
+                                "center_x": float(pt_orig[0]),
+                                "center_y": float(pt_orig[1]),
+                            })
+                        else:
+                            gpt_targets.append({
+                                "label": gt["label"],
+                                "confidence": gt.get("confidence", 0.95),
+                                "center_x": float(gt["center_x"]),
+                                "center_y": float(gt["center_y"]),
+                            })
+                except Exception as gpt_err:
+                    logger.warning("Hybrid GPT-4o pass warning: %s", gpt_err)
+
+                # 3. Spatial Bipartite Matching: Map each YOLO physical box to the nearest GPT-4o semantic target
+                matched_yolo = set()
+                matched_gpt = set()
+                pairs = []
+                for yi, y_box in enumerate(yolo_raw_boxes):
+                    ycx, ycy = y_box["center_x"], y_box["center_y"]
+                    for gi, g_target in enumerate(gpt_targets):
+                        dist = float(np.hypot(ycx - g_target["center_x"], ycy - g_target["center_y"]))
+                        pairs.append((dist, yi, gi))
+
+                pairs.sort(key=lambda p: p[0])
+
+                for dist, yi, gi in pairs:
+                    if yi in matched_yolo or gi in matched_gpt:
+                        continue
+                    y_box = yolo_raw_boxes[yi]
+                    max_allowed = max(120.0, 1.8 * max(y_box["width"], y_box["height"]))
+                    if dist <= max_allowed:
+                        matched_yolo.add(yi)
+                        matched_gpt.add(gi)
+                        y_box["label"] = gpt_targets[gi]["label"]
+                        y_box["confidence"] = max(y_box["confidence"], gpt_targets[gi]["confidence"])
+
+                # If YOLO detected boxes, sort them neatly top-down left-right
+                if yolo_raw_boxes:
+                    # Sort row by row (tolerance ~35px in Y)
+                    yolo_raw_boxes.sort(key=lambda b: (round(b["center_y"] / 35.0), b["center_x"]))
+                    candidate_elements = yolo_raw_boxes
+                else:
+                    # Fallback to GPT-4o targets if YOLO model detected nothing
+                    candidate_elements = []
+                    for gi, gt in enumerate(gpt_targets):
+                        candidate_elements.append({
+                            "x1": gt["center_x"] - 25, "y1": gt["center_y"] - 25,
+                            "x2": gt["center_x"] + 25, "y2": gt["center_y"] + 25,
+                            "center_x": gt["center_x"], "center_y": gt["center_y"],
+                            "width": 50, "height": 50,
+                            "confidence": gt["confidence"],
+                            "label": gt["label"],
+                        })
+
+                # 4. Annotate image & calculate exact CNC coordinates
+                for idx, elem in enumerate(candidate_elements, start=1):
+                    ex1, ey1, ex2, ey2 = elem["x1"], elem["y1"], elem["x2"], elem["y2"]
+                    cx, cy = elem["center_x"], elem["center_y"]
+                    bw, bh = elem["width"], elem["height"]
+                    lbl = elem["label"]
+                    conf = elem["confidence"]
+
+                    cnc_x, cnc_y = self._map_to_cnc(cx, cy, cnc_origin, cnc_span, work_area)
+                    cnc_x += camera_offset[0]
+                    cnc_y += camera_offset[1]
+
+                    box_polygon = [
+                        [round(ex1, 1), round(ey1, 1)],
+                        [round(ex2, 1), round(ey1, 1)],
+                        [round(ex2, 1), round(ey2, 1)],
+                        [round(ex1, 1), round(ey2, 1)],
+                    ]
+
+                    # Draw stylish green bounding box & label badge on frame
+                    cv2.rectangle(annotated_frame, (int(ex1), int(ey1)), (int(ex2), int(ey2)), (16, 185, 129), 2)
+                    cv2.circle(annotated_frame, (int(cx), int(cy)), 4, (0, 255, 255), -1)
+                    tag_text = f"#{idx} {lbl}"
+                    (tw, th), _ = cv2.getTextSize(tag_text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+                    tag_y = max(th + 6, int(ey1) - 4)
+                    cv2.rectangle(annotated_frame, (int(ex1), tag_y - th - 5), (int(ex1) + tw + 6, tag_y + 3), (16, 185, 129), -1)
+                    cv2.putText(annotated_frame, tag_text, (int(ex1) + 3, tag_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+                    processed_objects.append({
+                        "id": idx,
+                        "label": lbl,
+                        "confidence": round(conf, 2),
+                        "pixel_x": round(cx, 1),
+                        "pixel_y": round(cy, 1),
+                        "cnc_x": round(cnc_x, 1),
+                        "cnc_y": round(cnc_y, 1),
+                        "width": round(bw, 1),
+                        "height": round(bh, 1),
+                        "box_polygon": box_polygon,
+                    })
+
+                warped_annotated = warped_img.copy() if warped_img is not None else None
+            elif m_type == "yolo":
                 # --- Chạy best.pt trực tiếp trên ảnh gốc (Full Frame, y hệt snippet) ---
                 elem_model = get_yolo_element_model()
                 infer_kw = _infer_kwargs()
@@ -434,7 +676,7 @@ class AIDetectorService:
             )
             kwargs = dict(
                 model=model,
-                temperature=0.1,
+                temperature=0.0,
                 messages=[
                     {"role": "system", "content": system + extra},
                     {"role": "user", "content": [
@@ -528,14 +770,11 @@ class AIDetectorService:
             "You are a precision UI touch-localization assistant for a robotic CNC stylus tester. The image is cropped to "
             "ONE phone/POS device and has a thin YELLOW GRID with labels 0.1-0.9 (x labels on top, y labels on the left) "
             "- use it to read accurate normalized coordinates, then ignore the grid itself. "
-            "Detect EVERY individual touchable element INSIDE the lit screen, including: each app icon (use the app name as label, e.g. 'Camera', 'Settings'), "
-            "dock icons, buttons, keypad keys, input fields, search bars, toggles, widgets. "
-            "center_x_norm / center_y_norm must be the exact center of the element relative to THIS cropped image (0-1), "
-            "and must never fall on the bezel, table or background. Each box tightly encloses ONE element. "
-            "Do not merge icons and do not invent elements: only list what is clearly visible, labelled with the text actually shown "
-            "(never generic guesses like 'System Update' or 'Back Button' unless visibly drawn). If a popup/folder is open, only list its contents. "
-            "Ignore wallpaper photos/people. "
-            "If the user asks for specific elements, return only those; otherwise return all. " + schema
+            "Detect EVERY individual touchable element INSIDE the lit screen, including: each app icon, dock icon, "
+            "buttons, keypad keys (e.g. 'Key 1', 'Key 2', ... 'Key 9', 'Key 0', 'C', 'Cancel', 'Pay'), input fields, search bars. "
+            "CRITICAL ACCURACY REQUIREMENT: center_x_norm and center_y_norm MUST strictly coincide with the exact visible physical center of the button/key as aligned with the yellow grid numbers (0.1 - 0.9). "
+            "Do NOT place any phantom keys in empty whitespace. Each box tightly encloses ONE element. "
+            "Label each element with the EXACT visible text on it (e.g. 'Purchase', 'Key 1', 'Cancel', 'Pay'). " + schema
         )
         data = self._call_vision_json(client, model, system, user_target, grid)
         res = self._parse_targets(data, cw, ch)
@@ -567,6 +806,10 @@ class AIDetectorService:
             "\"confidence\": 0.0-1.0, \"center_x_norm\": 0-1, \"center_y_norm\": 0-1, \"width_norm\": 0-1, \"height_norm\": 0-1}]}. "
             "All coordinates are normalized 0.0-1.0 relative to the image given."
         )
+        if is_cropped_screen:
+            # Vùng làm việc đã được căn chỉnh 4 góc chuẩn xác thành màn hình thiết bị:
+            # Quét trực tiếp 1 lần (single-pass) trên toàn màn hình, không cắt lát (tiling) tránh lệch toạ độ và tăng tốc độ gấp 3 lần!
+            return self._detect_elements_in_crop(client, model, image, (0, 0, w, h), user_target, schema)
 
         # ---- Find every device in the work area ----
         device_boxes: List[Tuple[int, int, int, int]] = []

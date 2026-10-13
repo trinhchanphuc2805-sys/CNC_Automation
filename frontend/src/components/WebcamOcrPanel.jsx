@@ -15,9 +15,17 @@ export function formatLabelToEnglish(label) {
     return `Key ${m[1]}`;
   }
 
+  if (lower.includes('pay now') || lower.includes('paynow')) return 'Pay Now Button';
+  if (lower.includes('tap to pay') || lower.includes('contactless') || lower.includes('tap')) return 'Tap to Pay';
+  if (lower.includes('insert card') || lower.includes('insert')) return 'Insert Card';
+  if (lower.includes('swipe card') || lower.includes('swipe')) return 'Swipe Card';
+  if (lower.includes('purchase')) return 'Purchase';
+  if (lower.includes('payment')) return 'Payment Icon';
   if (lower.includes('thanh toan') || lower.includes('thanh toán') || lower.includes('pay')) return 'Pay Button';
   if (lower.includes('huy') || lower.includes('hủy') || lower.includes('cancel')) return 'Cancel Button';
   if (lower.includes('enter') || lower.includes('ok')) return 'Enter / OK Key';
+  if (lower.includes('tiep tuc') || lower.includes('tiếp tục') || lower.includes('continue') || lower.includes('next')) return 'Next / Continue Button';
+  if (lower.includes('xac nhan') || lower.includes('xác nhận') || lower.includes('confirm')) return 'Confirm Button';
   if (lower.includes('so tien') || lower.includes('số tiền') || lower.includes('nhap') || lower.includes('nhập') || lower.includes('amount')) return 'Amount Input Field';
   if (lower.includes('dang nhap') || lower.includes('đăng nhập') || lower.includes('login')) return 'Login Button';
   if (lower.includes('mat khau') || lower.includes('mật khẩu') || lower.includes('password')) return 'Password Field';
@@ -82,7 +90,49 @@ function matchStepWithDetected(step, detectedList) {
     if (cancelMatch) return cancelMatch;
   }
 
-  // Amount input field
+  // Next / Continue / Confirm button for screen transitions
+  if (
+    targetClean.includes('tiep tuc') ||
+    targetClean.includes('continue') ||
+    targetClean.includes('next') ||
+    targetClean.includes('xac nhan') ||
+    targetClean.includes('confirm') ||
+    targetClean.includes('dong y') ||
+    targetClean.includes('submit') ||
+    targetClean.includes('hoan tat')
+  ) {
+    const nextMatch = detectedList.find((d) => {
+      const dLabel = (d.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return (
+        dLabel.includes('tiep tuc') ||
+        dLabel.includes('continue') ||
+        dLabel.includes('next') ||
+        dLabel.includes('xac nhan') ||
+        dLabel.includes('confirm') ||
+        dLabel.includes('dong y') ||
+        dLabel.includes('submit') ||
+        dLabel.includes('hoan tat')
+      );
+    });
+    if (nextMatch) return nextMatch;
+  }
+
+  // POS Specific buttons: Payment Icon, Purchase, Tap/Insert/Swipe, Pay Now
+  if (targetClean.includes('payment') || targetClean.includes('purchase') || targetClean.includes('tap') || targetClean.includes('insert') || targetClean.includes('swipe') || targetClean.includes('pay now') || targetClean.includes('paynow')) {
+    const posMatch = detectedList.find((d) => {
+      const dLabel = (d.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (targetClean.includes('purchase') && dLabel.includes('purchase')) return true;
+      if (targetClean.includes('payment') && dLabel.includes('payment')) return true;
+      if (targetClean.includes('tap') && (dLabel.includes('tap') || dLabel.includes('contactless'))) return true;
+      if (targetClean.includes('insert') && dLabel.includes('insert')) return true;
+      if (targetClean.includes('swipe') && dLabel.includes('swipe')) return true;
+      if ((targetClean.includes('pay now') || targetClean.includes('paynow')) && (dLabel.includes('pay now') || dLabel.includes('paynow') || dLabel.includes('pay'))) return true;
+      return false;
+    });
+    if (posMatch) return posMatch;
+  }
+
+  // Amount input field or denomination buttons (e.g. 500k, 100k, 200k)
   if (targetClean.includes('nhap') || targetClean.includes('so tien') || targetClean.includes('amount') || targetClean.includes('input') || step.action === 'TYPE') {
     const inputMatch = detectedList.find((d) => {
       const dLabel = (d.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -103,6 +153,7 @@ function matchStepWithDetected(step, detectedList) {
 
 const WebcamOcrPanel = ({
   activeTestScript = null,
+  setTestScript = null,
   aiTargets: externalAiTargets = null,
   setAiTargets: setExternalAiTargets = null,
   onSendToAiStudio = null,
@@ -110,6 +161,10 @@ const WebcamOcrPanel = ({
   onCompleteExecution = null,
   isExecutingScript = false,
   onSwitchToAiStudio = null,
+  sharedStream = null,
+  cameras: propCameras = null,
+  cameraId: propCameraId = '',
+  setCameraId: propSetCameraId = null,
 }) => {
   const stopScriptRef = useRef(false);
   // Navigation tabs: 'ai' | 'roi' | 'grid' | 'ocr'
@@ -117,8 +172,12 @@ const WebcamOcrPanel = ({
   const [currentExecutingStep, setCurrentExecutingStep] = useState(null);
 
   // Camera & preview states
-  const [cameras, setCameras] = useState([]);
-  const [cameraId, setCameraId] = useState('');
+  const [localCameras, setLocalCameras] = useState([]);
+  const cameras = propCameras && propCameras.length > 0 ? propCameras : localCameras;
+  const setCameras = setLocalCameras;
+  const [localCameraId, setLocalCameraId] = useState('');
+  const cameraId = propCameraId !== undefined && propCameraId !== '' ? propCameraId : localCameraId;
+  const setCameraId = propSetCameraId || setLocalCameraId;
   const [cameraRetry, setCameraRetry] = useState(0);
   const [cameraError, setCameraError] = useState('');
   const [capturedImage, setCapturedImage] = useState('');
@@ -151,7 +210,7 @@ const WebcamOcrPanel = ({
 
   // AI Target Detection states
   const [aiPrompt, setAiPrompt] = useState('All buttons, app icons, and numeric keypad keys on POS machine screen');
-  const [aiModel, setAiModel] = useState('yolo');
+  const [aiModel, setAiModel] = useState('hybrid');
   const [openaiApiKey, setOpenaiApiKey] = useState(() => localStorage.getItem('cnc_openai_api_key') || '');
   const [openaiStatus, setOpenaiStatus] = useState({ configured: false, masked_key: '' });
   const [showKeyInput, setShowKeyInput] = useState(false);
@@ -188,6 +247,28 @@ const WebcamOcrPanel = ({
   }, [selectedTargetId, aiTargets]);
   const [lastTargetPoint, setLastTargetPoint] = useState(null);
   const [runningSequence, setRunningSequence] = useState(false);
+  const [isLocked, setIsLocked] = useState(false);
+  const [lockedSnapshot, setLockedSnapshot] = useState(null);
+  const [parkCornerIndex, setParkCornerIndex] = useState(0);
+
+  // Load persisted setup lock from backend on mount
+  useEffect(() => {
+    axios.get(`${API_BASE}/webcam/setup-lock`)
+      .then((res) => {
+        if (res.data?.is_locked && res.data?.data) {
+          const d = res.data.data;
+          if (d.targets && d.targets.length > 0) {
+            setAiTargets(d.targets);
+            setIsLocked(true);
+            if (d.snapshot) setLockedSnapshot(d.snapshot);
+            if (d.work_area && d.work_area.length === 4) {
+              setSavedWorkArea(d.work_area);
+            }
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Red Pen Marker & Step Auto-Calibration states
   const [redPenPos, setRedPenPos] = useState(null);
@@ -255,6 +336,148 @@ const WebcamOcrPanel = ({
     } catch { }
   };
 
+  // Model AI YOLO Preload & Warmup states
+  const [modelStatus, setModelStatus] = useState(null);
+  const [isWarmingUp, setIsWarmingUp] = useState(false);
+
+  const fetchModelStatus = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/webcam/model-status`);
+      if (res.data) {
+        setModelStatus(res.data);
+        return res.data;
+      }
+    } catch {
+      // Ignore
+    }
+    return null;
+  };
+
+  const handleWarmupModel = async (showToast = true) => {
+    setIsWarmingUp(true);
+    let tId = null;
+    if (showToast) tId = toast.loading('Đang nạp trước model YOLO & OpenAI GPT-4o...');
+    try {
+      const res = await axios.post(`${API_BASE}/webcam/model-warmup`);
+      if (res.data) {
+        setModelStatus((prev) => ({
+          ...prev,
+          yolo_element_loaded: Boolean(res.data.yolo_element),
+          openai_ready: Boolean(res.data.openai),
+          hybrid_ready: Boolean(res.data.yolo_element && res.data.openai),
+        }));
+        if (showToast) {
+          const gptPart = res.data.openai ? ' & OpenAI GPT-4o' : '';
+          toast.success(`Đã nạp sẵn model YOLO (best.pt)${gptPart}! Quét detect sẽ phản hồi tức thì.`, { id: tId });
+        }
+      }
+    } catch (err) {
+      if (showToast) toast.error('Không thể nạp model: ' + (err.message || 'Lỗi server'), { id: tId });
+    } finally {
+      setIsWarmingUp(false);
+      fetchModelStatus();
+    }
+  };
+
+  // Target renaming & mapping to script steps
+  const handleUpdateTargetLabel = (targetId, newLabel) => {
+    const updated = aiTargets.map((t) => (t.id === targetId ? { ...t, label: newLabel } : t));
+    setAiTargets(updated);
+  };
+
+  const handleMapTargetToStep = (target, stepIdxStr) => {
+    if (stepIdxStr === '' || stepIdxStr == null) return;
+    const sIdx = Number(stepIdxStr);
+    const step = activeTestScript && activeTestScript[sIdx];
+    if (!step) return;
+
+    const assignedLabel = step.target || target.label;
+    const updatedTargets = aiTargets.map((t) =>
+      t.id === target.id
+        ? { ...t, label: assignedLabel, mappedStepIndex: sIdx, mappedStepName: step.target }
+        : t
+    );
+    setAiTargets(updatedTargets);
+
+    if (setTestScript) {
+      setTestScript((prev) => {
+        const next = [...prev];
+        if (next[sIdx]) {
+          next[sIdx] = {
+            ...next[sIdx],
+            cnc_x: target.cnc_x,
+            cnc_y: target.cnc_y,
+            pixel_x: target.pixel_x,
+            pixel_y: target.pixel_y,
+            mappedTargetId: target.id,
+          };
+        }
+        return next;
+      });
+    }
+
+    toast.success(`Đã gán Target #${target.id} (${assignedLabel}) vào Bước #${sIdx + 1} (Toạ độ CNC: X=${target.cnc_x}, Y=${target.cnc_y})`);
+  };
+
+  const handleAutoMapToScript = () => {
+    if (!activeTestScript || !Array.isArray(activeTestScript) || activeTestScript.length === 0) {
+      toast.error('Không tìm thấy kịch bản test để map!');
+      return;
+    }
+    if (!aiTargets || aiTargets.length === 0) {
+      toast.error('Chưa có targets nào được nhận diện trên camera!');
+      return;
+    }
+
+    const clickSteps = activeTestScript
+      .map((s, idx) => ({ ...s, originalIdx: idx }))
+      .filter((s) => s.action === 'CLICK' || s.action === 'TYPE');
+
+    let mappedCount = 0;
+    const updatedTargets = [...aiTargets];
+    const updatedScript = setTestScript ? [...activeTestScript] : null;
+
+    // Sắp xếp các target theo thứ tự đọc: trên xuống dưới, trái qua phải
+    const sortedTargets = [...updatedTargets].sort((a, b) => {
+      const yDiff = (a.pixel_y || 0) - (b.pixel_y || 0);
+      if (Math.abs(yDiff) > 30) return yDiff;
+      return (a.pixel_x || 0) - (b.pixel_x || 0);
+    });
+
+    sortedTargets.forEach((target, orderIdx) => {
+      if (orderIdx < clickSteps.length) {
+        const step = clickSteps[orderIdx];
+        const sIdx = step.originalIdx;
+        const targetIdx = updatedTargets.findIndex((t) => t.id === target.id);
+        if (targetIdx >= 0) {
+          updatedTargets[targetIdx] = {
+            ...updatedTargets[targetIdx],
+            label: step.target || updatedTargets[targetIdx].label,
+            mappedStepIndex: sIdx,
+            mappedStepName: step.target,
+          };
+          if (updatedScript && updatedScript[sIdx]) {
+            updatedScript[sIdx] = {
+              ...updatedScript[sIdx],
+              cnc_x: target.cnc_x,
+              cnc_y: target.cnc_y,
+              pixel_x: target.pixel_x,
+              pixel_y: target.pixel_y,
+              mappedTargetId: target.id,
+            };
+          }
+          mappedCount += 1;
+        }
+      }
+    });
+
+    setAiTargets(updatedTargets);
+    if (updatedScript && setTestScript) {
+      setTestScript(updatedScript);
+    }
+    toast.success(`Đã tự động liên kết ${mappedCount} targets vào các bước trong kịch bản!`);
+  };
+
   useEffect(() => {
     axios.get(`${API_BASE}/webcam/ocr-engine`)
       .then((response) => setEngine(response.data.engine))
@@ -262,6 +485,11 @@ const WebcamOcrPanel = ({
     axios.get(`${API_BASE}/webcam/openai-status`)
       .then((res) => { if (res.data) setOpenaiStatus(res.data); })
       .catch(() => { });
+    fetchModelStatus().then((status) => {
+      if (!status?.yolo_element_loaded) {
+        handleWarmupModel(false);
+      }
+    });
     refreshCncStatus();
     const timer = setInterval(refreshCncStatus, 2500);
     return () => clearInterval(timer);
@@ -289,6 +517,14 @@ const WebcamOcrPanel = ({
   };
 
   useEffect(() => {
+    if (sharedStream) {
+      if (videoRef.current) {
+        videoRef.current.srcObject = sharedStream;
+        videoRef.current.play().catch(() => {});
+      }
+      return;
+    }
+
     let active = true;
     const startCamera = async () => {
       try {
@@ -298,8 +534,9 @@ const WebcamOcrPanel = ({
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             ...(cameraId ? { deviceId: { exact: cameraId } } : {}),
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
+            width: { ideal: 1280, max: 1920 },
+            height: { ideal: 720, max: 1080 },
+            frameRate: { ideal: 30, max: 30 },
           },
           audio: false,
         });
@@ -332,7 +569,7 @@ const WebcamOcrPanel = ({
       active = false;
       if (streamRef.current) streamRef.current.getTracks().forEach((track) => track.stop());
     };
-  }, [cameraId, cameraRetry]);
+  }, [sharedStream, cameraId, cameraRetry]);
 
   const cncActiveUntilRef = useRef(0);
   const markCncMoving = (extraMs = 1800) => {
@@ -702,6 +939,165 @@ const WebcamOcrPanel = ({
     });
   };
 
+  // Park CNC to Safe Corner (Default: Corner 0 / Top-Left of calibrated workbed)
+  const handleParkToCorner = async (cornerIdx = 0) => {
+    await runAction('park-cnc', async () => {
+      const activeWorkArea = (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : savedWorkArea);
+      if (!activeWorkArea || activeWorkArea.length < 4) {
+        toast.error('Chưa có 4 góc khung bàn. Vui lòng bấm "Scan 4-Corner Frame" hoặc định vị 4 góc trước!');
+        return;
+      }
+      const corner = activeWorkArea[cornerIdx];
+      const px = Array.isArray(corner) ? corner[0] : (corner?.x ?? 0);
+      const py = Array.isArray(corner) ? corner[1] : (corner?.y ?? 0);
+
+      toast.loading(`Đang tính tọa độ và di chuyển CNC về Góc ${cornerIdx + 1}...`, { id: 'park-cnc' });
+      await ensureArduinoConnected();
+
+      const mapRes = await axios.post(`${API_BASE}/webcam/map-pixel`, {
+        pixel_x: px,
+        pixel_y: py,
+        work_area: activeWorkArea,
+        origin_x: originX,
+        origin_y: originY,
+        cnc_width: cncWidth,
+        cnc_height: cncHeight,
+        camera_offset_x: cameraOffsetX,
+        camera_offset_y: cameraOffsetY,
+      });
+
+      const { cnc_x, cnc_y } = mapRes.data;
+
+      await axios.post(`${API_BASE}/cnc/park`, {
+        target_x: cnc_x,
+        target_y: cnc_y,
+        lift_a: true,
+      });
+
+      await refreshCncStatus();
+      setParkCornerIndex(cornerIdx);
+      markCncMoving(2000);
+      toast.success(`CNC đã đỗ an toàn tại Góc ${cornerIdx + 1} (X: ${Math.round(cnc_x)}, Y: ${Math.round(cnc_y)}). Camera không bị che!`, { id: 'park-cnc', duration: 4000 });
+    });
+  };
+
+  // Lock targets after clean detection
+  const handleLockSetup = async () => {
+    if (!aiTargets || aiTargets.length === 0) {
+      toast.error('Chưa có targets nào được nhận diện! Vui lòng bấm Detect Elements trước.');
+      return;
+    }
+    const currentFrame = captureFrame();
+    const activeWorkArea = (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : savedWorkArea);
+
+    try {
+      await axios.post(`${API_BASE}/webcam/setup-lock`, {
+        work_area: activeWorkArea,
+        targets: aiTargets,
+        snapshot: currentFrame,
+        is_locked: true,
+      });
+    } catch (e) {
+      console.warn('Backend setup-lock save notice:', e);
+    }
+
+    setIsLocked(true);
+    setLockedSnapshot(currentFrame);
+    setLiveDetect(false); // Disable live re-scan so Z motion never wipes targets
+    toast.success(`🔒 Đã khóa cố định ${aiTargets.length} phím! Chế độ Execute sẽ không bị trục Z làm sai lệch.`, { duration: 4500 });
+  };
+
+  // Unlock to allow re-detecting or editing
+  const handleUnlockSetup = async () => {
+    try {
+      await axios.delete(`${API_BASE}/webcam/setup-lock`);
+    } catch (e) {
+      console.warn('Backend setup-lock clear notice:', e);
+    }
+    setIsLocked(false);
+    toast('Đã mở khóa cấu hình. Bạn có thể Re-Scan hoặc chỉnh sửa phím tự do.', { icon: '🔓' });
+  };
+
+  // Handle Multi-Screen transition: Park to Corner 0, wait for settle, capture clean frame and detect new screen elements
+  const handlePerformScreenTransition = async (stepIdx, scriptList) => {
+    toast.loading(`[Chuyển trang #${stepIdx + 1}] Đang đỗ CNC về Góc để camera sạch 100%...`, { id: 'auto-run' });
+
+    // 1. Move CNC to safe park position (Corner 0) with A lifted
+    try {
+      const activeWorkArea = (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : savedWorkArea);
+      if (activeWorkArea && activeWorkArea.length >= 4) {
+        const corner = activeWorkArea[parkCornerIndex || 0];
+        const px = Array.isArray(corner) ? corner[0] : (corner?.x ?? 0);
+        const py = Array.isArray(corner) ? corner[1] : (corner?.y ?? 0);
+        const mapRes = await axios.post(`${API_BASE}/webcam/map-pixel`, {
+          pixel_x: px,
+          pixel_y: py,
+          work_area: activeWorkArea,
+          origin_x: originX,
+          origin_y: originY,
+          cnc_width: cncWidth,
+          cnc_height: cncHeight,
+          camera_offset_x: cameraOffsetX,
+          camera_offset_y: cameraOffsetY,
+        });
+        await axios.post(`${API_BASE}/cnc/park`, {
+          target_x: mapRes.data.cnc_x,
+          target_y: mapRes.data.cnc_y,
+          lift_a: true,
+        });
+        await refreshCncStatus();
+      }
+    } catch (parkErr) {
+      console.warn('Park on transition error:', parkErr);
+    }
+
+    // 2. Wait for phone app transition animation to finish and screen to settle
+    await new Promise((r) => setTimeout(r, 1600));
+
+    // 3. Capture fresh frame
+    let newFrame = captureFrame();
+    if (!newFrame) {
+      await new Promise((r) => setTimeout(r, 500));
+      newFrame = captureFrame();
+    }
+    if (!newFrame) return null;
+
+    toast.loading(`[Màn hình tiếp theo] Camera đã sạch. AI Vision đang quét nhận diện các nút...`, { id: 'auto-run' });
+
+    try {
+      const activeWorkArea = (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : savedWorkArea);
+      const detectPrompt = aiPrompt.trim() || 'all buttons, continue, confirm, amount options, and key items on device screen';
+      const detectRes = await axios.post(`${API_BASE}/webcam/ai-detect`, {
+        image_data: newFrame,
+        work_area: activeWorkArea,
+        prompt: detectPrompt,
+        model_type: aiModel || 'gpt4o',
+        cnc_width: cncWidth,
+        cnc_height: cncHeight,
+        invert_x: invertX,
+        invert_y: invertY,
+        swap_xy: swapXY,
+      });
+
+      if (detectRes.data?.success && detectRes.data?.objects) {
+        const newDetected = detectRes.data.objects.map((obj) => ({
+          ...obj,
+          label: formatLabelToEnglish(obj.label),
+        }));
+        setAiTargets(newDetected);
+        if (detectRes.data.warped_preview) setWarpedPreview(detectRes.data.warped_preview);
+        toast.success(`[Màn hình tiếp theo] Nhận diện ${newDetected.length} nút mới thành công!`, { id: 'auto-run', duration: 4000 });
+        return newDetected;
+      }
+    } catch (e) {
+      console.warn('Screen transition AI detect warning:', e);
+      toast.error(`Không thể quét màn hình mới: ${e.message}`, { id: 'auto-run' });
+    }
+    return null;
+  };
+
+
+
   // 3. AI Target Detection
   const handleRunAiDetection = () => runAction('ai-detect', async () => {
     toast.loading('AI Vision is analyzing frame & detecting targets...', { id: 'ai-detect' });
@@ -1019,6 +1415,11 @@ const WebcamOcrPanel = ({
           const { avgDiff, changedBlockRatio, changedBlocks } = analyzeBlockDiff(currLuma, baselineLuma);
 
           if (avgDiff >= MIN_SCREEN_CHANGE && changedBlockRatio >= MIN_GLOBAL_BLOCK_RATIO) {
+            if (isLocked) {
+              screenState = 'STABLE';
+              setLiveStatus('🔒 Targets Locked (Setup Mode)');
+              return;
+            }
             // True global screen transition: drop the old overlay immediately, then detect the new page
             setAiTargets([]);
             setSelectedTargetId(null);
@@ -1516,7 +1917,7 @@ const WebcamOcrPanel = ({
             image_data: currentFrame,
             work_area: fixedWorkArea,
             prompt: detectPrompt,
-            model_type: 'gpt4o',
+            model_type: aiModel || 'hybrid',
             cnc_width: cncWidth,
             cnc_height: cncHeight,
             invert_x: invertX,
@@ -1558,13 +1959,25 @@ const WebcamOcrPanel = ({
 
         toast.loading(`[Step ${i + 1}/${scriptToRun.length}] Processing: ${step.target}`, { id: 'auto-run' });
 
+        // If step is a dedicated TRANSITION_SCREEN step, perform park & scan and proceed
+        if (step.action === 'TRANSITION_SCREEN') {
+          toast.loading(`[Bước ${i + 1}/${scriptToRun.length}] Chuyển trang: Đang đỗ CNC về góc & quét màn hình mới...`, { id: 'auto-run' });
+          const nextDetected = await handlePerformScreenTransition(i, scriptToRun);
+          if (nextDetected && nextDetected.length > 0) {
+            detected = nextDetected;
+          }
+          if (onStepUpdate) onStepUpdate(i, 'passed');
+          continue;
+        }
+
         // Match exact target element from detected camera objects
         const matched = matchStepWithDetected(step, detected);
 
-        const targetCncX = (step.cnc_x !== undefined && step.cnc_x !== null) ? step.cnc_x : matched?.cnc_x;
-        const targetCncY = (step.cnc_y !== undefined && step.cnc_y !== null) ? step.cnc_y : matched?.cnc_y;
-        const targetPxX = (step.pixel_x !== undefined && step.pixel_x !== null) ? step.pixel_x : (matched?.pixel_x ?? matched?.center_x);
-        const targetPxY = (step.pixel_y !== undefined && step.pixel_y !== null) ? step.pixel_y : (matched?.pixel_y ?? matched?.center_y);
+        // Prefer matched freshest coordinates on active screen, fallback to pre-recorded step coordinates
+        const targetCncX = (matched?.cnc_x !== undefined && matched?.cnc_x !== null) ? matched.cnc_x : step.cnc_x;
+        const targetCncY = (matched?.cnc_y !== undefined && matched?.cnc_y !== null) ? matched.cnc_y : step.cnc_y;
+        const targetPxX = (matched?.pixel_x ?? matched?.center_x) ?? step.pixel_x;
+        const targetPxY = (matched?.pixel_y ?? matched?.center_y) ?? step.pixel_y;
 
         if (targetCncX !== undefined && targetCncY !== undefined && targetCncX !== null && targetCncY !== null) {
           if (matched?.id) setSelectedTargetId(matched.id);
@@ -1636,14 +2049,49 @@ const WebcamOcrPanel = ({
         } else {
           // Simulation / wait delay
           const waitTime = Math.max(step.delay_ms || 500, 650);
-          await new Promise((r) => setTimeout(r, waitTime));
           if (onStepUpdate) onStepUpdate(i, 'passed');
+        }
+
+        // Auto transition to next screen if step specifies park_after (e.g. clicking Enter/Next/Tiếp tục)
+        if (step.park_after && i < scriptToRun.length - 1 && !stopScriptRef.current) {
+          const nextDetected = await handlePerformScreenTransition(i, scriptToRun);
+          if (nextDetected && nextDetected.length > 0) {
+            detected = nextDetected;
+          }
         }
       }
 
       if (!stopScriptRef.current) {
         toast.success(`Successfully executed all ${scriptToRun.length} test steps!`, { id: 'auto-run', duration: 5000 });
         if (onCompleteExecution) onCompleteExecution(true);
+        // Automatically return CNC to safe park position (Corner 0)
+        try {
+          const activeWorkArea = (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : savedWorkArea);
+          if (activeWorkArea && activeWorkArea.length >= 4) {
+            const corner = activeWorkArea[parkCornerIndex || 0];
+            const px = Array.isArray(corner) ? corner[0] : (corner?.x ?? 0);
+            const py = Array.isArray(corner) ? corner[1] : (corner?.y ?? 0);
+            const mapRes = await axios.post(`${API_BASE}/webcam/map-pixel`, {
+              pixel_x: px,
+              pixel_y: py,
+              work_area: activeWorkArea,
+              origin_x: originX,
+              origin_y: originY,
+              cnc_width: cncWidth,
+              cnc_height: cncHeight,
+              camera_offset_x: cameraOffsetX,
+              camera_offset_y: cameraOffsetY,
+            });
+            await axios.post(`${API_BASE}/cnc/park`, {
+              target_x: mapRes.data.cnc_x,
+              target_y: mapRes.data.cnc_y,
+              lift_a: true,
+            });
+            await refreshCncStatus();
+          }
+        } catch (parkErr) {
+          console.warn('Auto return to park notice:', parkErr);
+        }
       }
     } catch (err) {
       toast.error(`Script execution error: ${err.message}`, { id: 'auto-run' });
@@ -2170,161 +2618,189 @@ const WebcamOcrPanel = ({
           </div>
         )}
 
-        {/* 3-STEP PIPELINE ACTION TOOLBAR */}
-        <div>
-          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2.5 flex items-center justify-between">
-            <span>3-Step Vision & CNC Execution Pipeline:</span>
-            <span className="text-[10px] text-slate-400 font-normal">
-              Scan Frame &rarr; Detect Screen Elements &rarr; Execute CNC Automation
+        {/* HAPPY CASE WORKFLOW: 4-STEP ZERO-OBSTRUCTION PIPELINE ACTION TOOLBAR */}
+        <div className="bg-white/80 backdrop-blur-xs p-3.5 rounded-2xl border border-slate-200 shadow-xs mb-3">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2.5 flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <span>🚀 Happy Flow (Zero-Obstruction Pipeline):</span>
+              {isLocked && (
+                <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <span>🔒</span> ĐÃ KHÓA ({aiTargets.length} NÚT BẤM)
+                </span>
+              )}
+            </span>
+            <span className="text-[10px] text-slate-400 font-normal hidden sm:inline">
+              1. Park Góc &rarr; 2. Scan Sạch &rarr; 3. Khóa Nút &rarr; 4. Execute Mượt
             </span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {/* Step 1: Scan 4-Corner Frame */}
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('roi');
-                if (calibrationPoints.length < 4) {
-                  const w = frameWidth || 640;
-                  const h = frameHeight || 480;
-                  setCalibrationPoints([
-                    { x: Math.round(w * 0.2), y: Math.round(h * 0.2) },
-                    { x: Math.round(w * 0.8), y: Math.round(h * 0.2) },
-                    { x: Math.round(w * 0.8), y: Math.round(h * 0.8) },
-                    { x: Math.round(w * 0.2), y: Math.round(h * 0.8) },
-                  ]);
-                }
-              }}
-              disabled={busy}
-              className="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-white text-left transition-all group cursor-pointer"
-            >
-              <div className="flex items-center gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-[#404E67] text-white flex items-center justify-center font-bold text-xs">
-                  1
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-slate-800">Scan 4-Corner Frame</div>
-                  <div className="text-[10px] text-slate-500">Calibrate screen boundary</div>
-                </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+            {/* Bước 1: Park to Corner (Đưa CNC về góc bàn để camera sạch) */}
+            <div className="flex items-center gap-2 p-2.5 rounded-xl border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-50 transition-all">
+              <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
+                1
               </div>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${savedWorkArea ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
-                {savedWorkArea ? 'Calibrated' : 'Not scanned'}
-              </span>
-            </button>
-
-            {/* Step 2: Run Detect AI Elements */}
-            <button
-              type="button"
-              onClick={handleRunAiDetection}
-              disabled={busy}
-              className={`flex items-center justify-between p-3 rounded-xl border transition-all group cursor-pointer ${loading === 'ai-detect'
-                ? 'border-sky-400 bg-sky-50 shadow-md ring-2 ring-sky-300'
-                : 'border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-white'
-                }`}
-              title="Detect ATM keypad keys (1,2,3,4, Enter) and screen items"
-            >
-              <div className="flex items-center gap-2.5">
-                <div className={`w-7 h-7 rounded-lg text-white flex items-center justify-center font-bold text-xs ${loading === 'ai-detect' ? 'bg-sky-500' : 'bg-[#01a9ac]'}`}>
-                  {loading === 'ai-detect' ? (
-                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    '2'
-                  )}
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-bold text-indigo-950 flex items-center justify-between">
+                  <span>Park về Góc</span>
+                  <select
+                    className="text-[10px] bg-white border border-indigo-300 rounded px-1 py-0.5 text-indigo-900 font-semibold cursor-pointer"
+                    value={parkCornerIndex}
+                    onChange={(e) => setParkCornerIndex(Number(e.target.value))}
+                    disabled={busy}
+                    title="Chọn góc bàn để đỗ CNC ra xa khỏi camera"
+                  >
+                    <option value={0}>Góc 1 (TL)</option>
+                    <option value={1}>Góc 2 (TR)</option>
+                    <option value={2}>Góc 3 (BR)</option>
+                    <option value={3}>Góc 4 (BL)</option>
+                  </select>
                 </div>
-                <div>
-                  <div className="text-xs font-bold text-slate-800">
-                    {loading === 'ai-detect' ? 'Detecting Targets...' : 'Detect Elements'}
-                  </div>
-                  <div className="text-[10px] text-slate-500">
-                    {loading === 'ai-detect' ? 'Analyzing camera frame...' : 'Keypad 1,2,3,4 & Enter'}
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => handleParkToCorner(parkCornerIndex)}
+                  disabled={busy}
+                  className="mt-1.5 w-full text-center text-[11px] font-bold py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white transition-all shadow-xs cursor-pointer"
+                >
+                  📍 Đỗ Z Ra Góc {parkCornerIndex + 1}
+                </button>
               </div>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${loading === 'ai-detect'
-                ? 'bg-sky-500 text-white animate-pulse'
-                : (aiTargets.length > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600')
-                }`}>
-                {loading === 'ai-detect' ? 'Scanning...' : (aiTargets.length > 0 ? `${aiTargets.length} targets` : 'Not detected')}
-              </span>
-            </button>
-
-            {/* Auto-Detect on Screen Change toggle + Quick Re-scan */}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setLiveDetect((v) => !v)}
-                className={`flex-1 flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer ${liveDetect
-                  ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-300'
-                  : 'border-slate-200 hover:border-slate-300 bg-slate-50 hover:bg-white'
-                  }`}
-                title="Tự động theo dõi màn hình điện thoại, chỉ nhận diện khi chuyển trang và khóa cố định vị trí các nút (không bị nhảy tọa độ)"
-              >
-                <div className="flex items-center gap-2.5">
-                  <span className={`w-2.5 h-2.5 rounded-full ${liveDetect ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
-                  <div>
-                    <div className="text-xs font-bold text-slate-800">Detect on Screen Change</div>
-                    <div className="text-[10px] text-slate-500">Tự nhận diện khi đổi trang & khóa vị trí</div>
-                  </div>
-                </div>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${liveDetect ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                  {liveDetect ? (liveStatus || 'ACTIVE') : 'OFF'}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleReScanCurrentScreen}
-                disabled={busy}
-                className="px-3 py-3 rounded-xl border border-sky-200 bg-sky-50 hover:bg-sky-100 text-sky-700 flex flex-col items-center justify-center transition-all cursor-pointer shadow-xs hover:shadow-sm"
-                title="Quét lại ngay màn hình hiện tại (Re-scan 2-Pass Consensus)"
-              >
-                <span className="text-xs">⚡</span>
-                <span className="text-[9px] font-bold whitespace-nowrap">Re-Scan</span>
-              </button>
             </div>
 
-            {/* Step 3: Execute CNC Automation */}
-            {!runningSequence ? (
-              <button
-                type="button"
-                onClick={() => handleStartScriptRunner(activeTestScript)}
-                disabled={busy}
-                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-[#0ac282] to-[#0df3a3] hover:shadow-md text-white text-left transition-all shadow-xs cursor-pointer"
-                title="Auto-connect COM port to Arduino and sequentially execute CNC taps"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-white/20 text-white flex items-center justify-center font-bold text-xs">
-                    4
-                  </div>
-                  <div>
-                    <div className="text-xs font-extrabold text-white">Execute CNC</div>
-                    <div className="text-[10px] text-emerald-100">Auto COM & tap keys</div>
-                  </div>
+            {/* Bước 2: Detect Elements (Chụp khi Z đã ra ngoài) */}
+            <div className={`flex items-center gap-2 p-2.5 rounded-xl border transition-all ${
+              loading === 'ai-detect'
+                ? 'border-sky-400 bg-sky-50 shadow-md ring-2 ring-sky-300'
+                : 'border-slate-200 bg-slate-50/80 hover:bg-white'
+            }`}>
+              <div className={`w-7 h-7 rounded-lg text-white flex items-center justify-center font-bold text-xs shrink-0 ${
+                loading === 'ai-detect' ? 'bg-sky-500' : 'bg-[#01a9ac]'
+              }`}>
+                {loading === 'ai-detect' ? (
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  '2'
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
+                  <span>{loading === 'ai-detect' ? 'Đang quét...' : 'Detect Nút Bấm'}</span>
+                  <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full ${
+                    aiTargets.length > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {aiTargets.length > 0 ? `${aiTargets.length} nút` : '0 nút'}
+                  </span>
                 </div>
-                <span className="text-[10px] font-extrabold bg-white text-emerald-700 px-2.5 py-0.5 rounded-full shadow-xs">
-                  Execute &rarr;
-                </span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleStopScriptRunner}
-                className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-red-500 to-rose-600 hover:shadow-md text-white text-left transition-all shadow-xs cursor-pointer"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-white/20 text-white flex items-center justify-center font-bold text-xs">
-                    <span className="w-2.5 h-2.5 bg-white rounded-xs inline-block" />
-                  </div>
-                  <div>
-                    <div className="text-xs font-extrabold text-white">Stop Execution</div>
-                    <div className="text-[10px] text-rose-100">Halt CNC commands</div>
-                  </div>
+                <div className="flex items-center justify-between text-[9px] font-semibold mt-1">
+                  <span className="flex items-center gap-1.5 text-emerald-700">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>
+                      {aiModel === 'hybrid'
+                        ? '⭐ Hybrid: YOLO (Toạ độ) + GPT-4o'
+                        : aiModel.startsWith('gpt')
+                          ? (aiModel === 'gpt4o-mini' ? 'GPT-4o-mini (~0.8s)' : 'GPT-4o Vision')
+                          : 'YOLO (RAM Cached)'}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleWarmupModel(true)}
+                    disabled={isWarmingUp}
+                    className="text-[9px] px-1.5 py-0.5 bg-sky-100 hover:bg-sky-200 text-sky-800 rounded font-bold cursor-pointer transition-colors"
+                    title="Nạp trước mô hình vào bộ nhớ để khi bấm Quét sẽ phản hồi tức thì"
+                  >
+                    {isWarmingUp ? 'Đang nạp...' : '⚡ Nạp trước'}
+                  </button>
                 </div>
-                <span className="text-[10px] font-bold bg-white text-red-600 px-2.5 py-0.5 rounded-full shadow-xs">
-                  Stop
-                </span>
-              </button>
-            )}
+                <button
+                  type="button"
+                  onClick={handleRunAiDetection}
+                  disabled={busy}
+                  className="mt-1.5 w-full text-center text-[11px] font-bold py-1.5 px-2 rounded-lg bg-[#01a9ac] hover:bg-[#019497] active:scale-95 text-white transition-all shadow-xs cursor-pointer"
+                  title="Chụp ảnh khi camera không bị Z che và nhận diện phím"
+                >
+                  🔍 Quét AI Nhận Diện
+                </button>
+              </div>
+            </div>
+
+            {/* Bước 3: Lock Kịch Bản / Unlock */}
+            <div className={`flex items-center gap-2 p-2.5 rounded-xl border transition-all ${
+              isLocked
+                ? 'border-emerald-300 bg-emerald-50/80 shadow-xs ring-1 ring-emerald-300'
+                : 'border-amber-200 bg-amber-50/60 hover:bg-amber-50'
+            }`}>
+              <div className={`w-7 h-7 rounded-lg text-white flex items-center justify-center font-bold text-xs shrink-0 ${
+                isLocked ? 'bg-emerald-600' : 'bg-amber-500'
+              }`}>
+                3
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
+                  <span>{isLocked ? 'Đã Khóa Targets' : 'Khóa Kịch Bản'}</span>
+                  <span className={`text-[9px] font-extrabold px-1.5 py-0.2 rounded-full ${
+                    isLocked ? 'bg-emerald-600 text-white' : 'bg-amber-100 text-amber-800'
+                  }`}>
+                    {isLocked ? 'LOCKED' : 'READY'}
+                  </span>
+                </div>
+                {!isLocked ? (
+                  <button
+                    type="button"
+                    onClick={handleLockSetup}
+                    disabled={busy || aiTargets.length === 0}
+                    className="mt-1.5 w-full text-center text-[11px] font-bold py-1.5 px-2 rounded-lg bg-amber-500 hover:bg-amber-600 active:scale-95 text-white transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                    title="Khóa cố định vị trí các phím để khi Z chạy không bị re-detect làm sai"
+                  >
+                    🔒 Khóa Vị Trí Phím
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleUnlockSetup}
+                    disabled={busy}
+                    className="mt-1.5 w-full text-center text-[11px] font-bold py-1.5 px-2 rounded-lg bg-white border border-emerald-400 hover:bg-emerald-100 active:scale-95 text-emerald-800 transition-all shadow-xs cursor-pointer"
+                    title="Mở khóa nếu bạn muốn đổi màn hình hoặc quét lại phím"
+                  >
+                    🔓 Mở Khóa / Quét Lại
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Bước 4: Execute CNC */}
+            <div className="flex items-center gap-2 p-2.5 rounded-xl border border-emerald-400 bg-gradient-to-br from-emerald-500/10 to-teal-500/20">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-r from-[#0ac282] to-[#0df3a3] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
+                4
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-extrabold text-slate-800 flex items-center justify-between">
+                  <span>Execute CNC</span>
+                  <span className="text-[9px] font-bold text-emerald-700 bg-white/80 px-1 rounded">
+                    {runningSequence ? 'RUNNING' : 'TỰ ĐỘNG'}
+                  </span>
+                </div>
+                {!runningSequence ? (
+                  <button
+                    type="button"
+                    onClick={() => handleStartScriptRunner(activeTestScript)}
+                    disabled={busy || aiTargets.length === 0}
+                    className="mt-1.5 w-full text-center text-[11px] font-extrabold py-1.5 px-2 rounded-lg bg-gradient-to-r from-[#0ac282] to-[#0df3a3] hover:brightness-105 active:scale-95 text-white transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                    title="Thực thi kịch bản bằng tọa độ đã khóa (trục Z di chuyển không ảnh hưởng)"
+                  >
+                    ⚡ Chạy Kịch Bản &rarr;
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleStopScriptRunner}
+                    className="mt-1.5 w-full text-center text-[11px] font-bold py-1.5 px-2 rounded-lg bg-red-500 hover:bg-red-600 active:scale-95 text-white transition-all shadow-xs cursor-pointer"
+                  >
+                    ⏹ Dừng Khẩn Cấp
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -2547,10 +3023,11 @@ const WebcamOcrPanel = ({
             <label>
               AI Model
               <select value={aiModel} onChange={(e) => setAiModel(e.target.value)} disabled={busy}>
-                <option value="yolo">YOLO Custom Model (Offline - best.pt)</option>
-                <option value="gpt4o">OpenAI GPT-4o (High Precision Vision)</option>
-                <option value="gpt4o-mini">OpenAI GPT-4o-mini (Fast & Cheap)</option>
-                <option value="opencv">OpenCV Contours & Shapes (Offline 0ms)</option>
+                <option value="hybrid">⭐ Hybrid: YOLO (Toạ độ chuẩn 100%) + GPT-4o (Tên nút)</option>
+                <option value="gpt4o">🌟 OpenAI GPT-4o (Độ nét cao - ~2s)</option>
+                <option value="gpt4o-mini">⚡ OpenAI GPT-4o-mini (Nhanh ~0.8s & Chuẩn chữ)</option>
+                <option value="yolo">🤖 YOLO Offline Model (best.pt - Toạ độ chuẩn)</option>
+                <option value="opencv">📐 OpenCV Contours & Shapes (Offline)</option>
               </select>
             </label>
             <label>
@@ -2570,11 +3047,26 @@ const WebcamOcrPanel = ({
           <div className="vision-actions-row">
             <button
               type="button"
+              onClick={() => handleWarmupModel(true)}
+              disabled={busy || isWarmingUp}
+              className="webcam-ocr-button"
+              style={{
+                background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                color: '#ffffff',
+                fontWeight: 700,
+              }}
+              title="Nạp trước mô hình AI vào bộ nhớ / kết nối mạng để lần quét tới phản hồi nhanh tức thì"
+            >
+              {isWarmingUp ? '⏳ ĐANG NẠP TRƯỚC...' : '⚡ NẠP TRƯỚC MODEL (WARMUP)'}
+            </button>
+
+            <button
+              type="button"
               onClick={handleRunAiDetection}
               disabled={busy}
               className="webcam-ocr-button webcam-ocr-button--primary"
             >
-              {loading === 'ai-detect' ? 'DETECTING TARGETS...' : 'RUN AI DETECTION'}
+              {loading === 'ai-detect' ? 'DETECTING TARGETS...' : '🔍 RUN AI DETECTION'}
             </button>
 
             {aiTargets.length > 0 && (
@@ -2724,20 +3216,31 @@ const WebcamOcrPanel = ({
                         </label>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      className="webcam-ocr-button webcam-ocr-button--quiet"
-                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}
-                      onClick={() => {
-                        const newCncPoints = [...cncCalibrationPoints];
-                        newCncPoints[idx] = { x: currentCncPos.x, y: currentCncPos.y };
-                        setCncCalibrationPoints(newCncPoints);
-                        toast.success(`Corner ${idx + 1} updated to CNC X:${currentCncPos.x}, Y:${currentCncPos.y}`);
-                      }}
-                      title="Read current CNC machine position"
-                    >
-                      READ POS
-                    </button>
+                    <div style={{ display: 'flex', gap: '0.25rem' }}>
+                      <button
+                        type="button"
+                        className="webcam-ocr-button webcam-ocr-button--quiet"
+                        style={{ padding: '0.25rem 0.4rem', fontSize: '0.7rem' }}
+                        onClick={() => {
+                          const newCncPoints = [...cncCalibrationPoints];
+                          newCncPoints[idx] = { x: currentCncPos.x, y: currentCncPos.y };
+                          setCncCalibrationPoints(newCncPoints);
+                          toast.success(`Corner ${idx + 1} updated to CNC X:${currentCncPos.x}, Y:${currentCncPos.y}`);
+                        }}
+                        title="Read current CNC machine position"
+                      >
+                        READ POS
+                      </button>
+                      <button
+                        type="button"
+                        className="webcam-ocr-button"
+                        style={{ padding: '0.25rem 0.45rem', fontSize: '0.7rem', background: '#4f46e5', color: 'white', fontWeight: 700 }}
+                        onClick={() => handleParkToCorner(idx)}
+                        title={`Park CNC directly to Corner ${idx + 1}`}
+                      >
+                        📍 PARK HERE
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -3104,7 +3607,7 @@ const WebcamOcrPanel = ({
                     handleMoveToCncTarget(t);
                   }}
                 >
-                  {formatLabelToEnglish(t.label)} {Number(t.confidence || 0).toFixed(2)}
+                  {t.mappedStepName ? `🎯 ${t.mappedStepName}` : formatLabelToEnglish(t.label)} {Number(t.confidence || 0).toFixed(2)}
                 </div>
               );
             })}
@@ -3155,7 +3658,7 @@ const WebcamOcrPanel = ({
                   </div>
                   {showCircle && (
                     <div className="vision-ai-tag">
-                      <strong>#{target.id} {formatLabelToEnglish(target.label)}</strong>
+                      <strong>#{target.id} {target.mappedStepName ? `🎯 ${target.mappedStepName}` : formatLabelToEnglish(target.label)}</strong>
                       <span>X:{target.cnc_x} Y:{target.cnc_y}</span>
                     </div>
                   )}
@@ -3358,6 +3861,30 @@ const WebcamOcrPanel = ({
 
               <button
                 type="button"
+                onClick={handleAutoMapToScript}
+                disabled={busy || !activeTestScript || activeTestScript.length === 0}
+                className="webcam-ocr-button"
+                style={{
+                  background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                  color: '#ffffff',
+                  fontWeight: 700,
+                  padding: '0.25rem 0.65rem',
+                  fontSize: '0.72rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  boxShadow: '0 2px 6px rgba(16, 185, 129, 0.25)',
+                }}
+                title="Tự động liên kết các mục tiêu đã nhận diện với các bước trong kịch bản"
+              >
+                🎯 Tự Động Map Kịch Bản
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setAddCustomTargetMode((v) => !v)}
                 disabled={busy}
                 className="webcam-ocr-button"
@@ -3395,13 +3922,32 @@ const WebcamOcrPanel = ({
             {aiTargets.map((target) => (
               <div
                 key={`card-${target.id}`}
-                className={`vision-target-card ${selectedTargetId === target.id ? 'vision-target-card--active' : ''}`}
+                className={`vision-target-card ${selectedTargetId === target.id ? 'vision-target-card--active' : ''} ${target.mappedStepIndex !== undefined ? 'ring-2 ring-emerald-400 bg-emerald-50/20' : ''}`}
                 onClick={() => handleMoveToCncTarget(target)}
               >
-                <div className="vision-target-card__header">
+                <div className="vision-target-card__header" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <span className="vision-target-card__id">#{target.id}</span>
-                  <span className="vision-target-card__label">{formatLabelToEnglish(target.label)}</span>
-                  <span className="vision-target-card__conf">{Math.round(target.confidence * 100)}%</span>
+                  <input
+                    type="text"
+                    value={target.label || ''}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => handleUpdateTargetLabel(target.id, e.target.value)}
+                    placeholder="Tên nút (vd: Purchase)"
+                    title="Đổi tên nút để phân biệt và liên kết kịch bản"
+                    style={{
+                      flex: 1,
+                      minWidth: '80px',
+                      padding: '2px 6px',
+                      fontSize: '0.78rem',
+                      fontWeight: 700,
+                      color: '#0f172a',
+                      background: '#ffffff',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '4px',
+                      outline: 'none',
+                    }}
+                  />
+                  <span className="vision-target-card__conf" style={{ fontSize: '0.7rem' }}>{Math.round(target.confidence * 100)}%</span>
                   <button
                     type="button"
                     title="Delete this item"
@@ -3414,7 +3960,57 @@ const WebcamOcrPanel = ({
                     ×
                   </button>
                 </div>
-                <div className="vision-target-card__coords" style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+
+                {/* Dropdown Gán vào bước kịch bản */}
+                <div style={{ marginTop: '6px' }} onClick={(e) => e.stopPropagation()}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#475569' }}>🔗 GÁN VÀO BƯỚC:</span>
+                    {target.mappedStepIndex !== undefined && (
+                      <span style={{ fontSize: '0.68rem', color: '#059669', fontWeight: 800 }}>✓ BƯỚC #{target.mappedStepIndex + 1}</span>
+                    )}
+                  </div>
+                  <select
+                    value={target.mappedStepIndex ?? ''}
+                    onChange={(e) => handleMapTargetToStep(target, e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '4px 6px',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      background: '#ffffff',
+                      color: '#0f172a',
+                      outline: 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <option value="">-- Chọn bước kịch bản để gán toạ độ --</option>
+                    {activeTestScript && Array.isArray(activeTestScript) && activeTestScript.map((s, sIdx) => (
+                      <option key={s.id || sIdx} value={sIdx}>
+                        Bước #{sIdx + 1}: {s.screen ? `[${s.screen}] ` : ''}{s.target || s.action}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Gợi ý nhanh nhãn nút POS */}
+                <div style={{ marginTop: '6px', display: 'flex', gap: '3px', flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
+                  <span style={{ fontSize: '0.65rem', color: '#64748b', alignSelf: 'center', fontWeight: 600 }}>Gán nhanh:</span>
+                  {['Purchase', 'Refund', 'Cash', 'Simulated POS', 'Payment', '1', '2', '3', 'Pay', 'Enter'].map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => handleUpdateTargetLabel(target.id, tag)}
+                      style={{ fontSize: '0.68rem', padding: '1px 5px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '4px', cursor: 'pointer', color: '#334155', fontWeight: 600 }}
+                      title={`Đặt tên target thành "${tag}"`}
+                    >
+                      +{tag}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="vision-target-card__coords" style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '6px' }}>
                   <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '6px', padding: '4px 8px', color: '#166534', fontSize: '0.85rem', fontWeight: 800 }}>
                     CNC: X = {target.cnc_x} • Y = {target.cnc_y}
                   </div>

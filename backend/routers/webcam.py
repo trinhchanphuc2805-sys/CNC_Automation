@@ -16,6 +16,7 @@ from schemas import (
     OcrEngineRequest,
     OpenAiKeyRequest,
     SaveSnapshotRequest,
+    SetupLockRequest,
 )
 from services.ai_detector import ai_detector_service
 from services.cnc_service import CNCService, get_service
@@ -41,6 +42,19 @@ def warmup():
     if not webcam_service.warmup_ocr():
         raise HTTPException(status_code=502, detail="OCR warmup failed")
     return {"success": True}
+
+
+@router.post("/model-warmup")
+def model_warmup():
+    """Tải trước model YOLO AI vào bộ nhớ và chạy dummy warmup để lần detect đầu tiên không bị trễ."""
+    return ai_detector_service.warmup_models()
+
+
+@router.get("/model-status")
+def model_status():
+    """Kiểm tra trạng thái model YOLO AI đã sẵn sàng trong RAM chưa."""
+    return ai_detector_service.get_model_status()
+
 
 
 @router.post("/set-ocr-engine")
@@ -394,5 +408,50 @@ def warp_preview(payload: dict):
         return {"success": False, "warped_preview": None}
     b64 = encode_image_to_base64(warped)
     return {"success": True, "warped_preview": b64}
+
+
+SETUP_LOCK_FILE = "backend/data/setup_lock.json"
+
+
+@router.get("/setup-lock")
+def get_setup_lock():
+    import os
+    from pathlib import Path
+    lock_path = Path(SETUP_LOCK_FILE)
+    if not lock_path.exists():
+        return {"is_locked": False, "data": None}
+    try:
+        data = json.loads(lock_path.read_text(encoding="utf-8"))
+        return {"is_locked": bool(data.get("is_locked", True)), "data": data}
+    except Exception as exc:
+        return {"is_locked": False, "error": str(exc), "data": None}
+
+
+@router.post("/setup-lock")
+def save_setup_lock(payload: SetupLockRequest):
+    import datetime
+    from pathlib import Path
+    lock_path = Path(SETUP_LOCK_FILE)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    save_data = {
+        "work_area": payload.work_area,
+        "park_coordinate": payload.park_coordinate,
+        "targets": payload.targets,
+        "snapshot": payload.snapshot,
+        "is_locked": payload.is_locked,
+        "locked_at": datetime.datetime.now().isoformat(),
+    }
+    lock_path.write_text(json.dumps(save_data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"success": True, "message": "Setup configuration successfully locked!", "data": save_data}
+
+
+@router.delete("/setup-lock")
+def delete_setup_lock():
+    from pathlib import Path
+    lock_path = Path(SETUP_LOCK_FILE)
+    if lock_path.exists():
+        lock_path.unlink()
+    return {"success": True, "message": "Setup lock cleared"}
+
 
 

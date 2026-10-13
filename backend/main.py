@@ -23,6 +23,21 @@ app.include_router(webcam.router)
 app.include_router(testcase.router)
 
 
+@app.on_event("startup")
+async def startup_event():
+    import threading
+    from services.ai_detector import ai_detector_service
+
+    def _preload():
+        try:
+            ai_detector_service.warmup_models()
+        except Exception:
+            pass
+
+    threading.Thread(target=_preload, daemon=True).start()
+
+
+
 if __name__ == "__main__":
     import uvicorn
 
