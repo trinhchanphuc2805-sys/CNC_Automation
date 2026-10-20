@@ -5,7 +5,7 @@ import { toast } from 'react-hot-toast';
 const API_BASE = 'http://localhost:8000';
 
 const DEFAULT_PROMPT =
-  'Quy trình máy POS: 1. Chọn icon Payment -> 2. Chọn Purchase tại Select Function Type -> 3. Nhập số tiền 123 và bấm Pay -> 4. Màn Checkout chọn Tap to Pay rồi bấm Pay Now -> 5. Nhập mã PIN 6 số (123456) bấm OK -> 6. Xác nhận giao dịch thành công và In hóa đơn (In Bill)';
+  'POS Terminal Flow: 1. Tap Payment icon -> 2. Select Purchase at Function Type -> 3. Enter amount 123 and tap Pay -> 4. Checkout screen: select Tap to Pay then Pay Now -> 5. Enter 6-digit PIN (123456) and tap OK -> 6. Confirm successful transaction and Print Bill';
 
 // ATM PIN Mock Data Specification
 const ATM_MOCK_DATA = {
@@ -74,75 +74,75 @@ const ATM_MOCK_DATA = {
 };
 
 export const MULTI_SCREEN_MOCK_DATA = {
-  test_name: 'Test Scenario: 4-Màn Hình Thanh Toán (Auto-Park & Chuyển Trang)',
-  description: 'Luồng kiểm thử 4 màn hình tuần tự: Nhập PIN -> Chọn Số Tiền -> Xác Nhận OTP -> Hoàn Tất (CNC tự động lùi về Park & Quét nút từng trang)',
+  test_name: 'Test Scenario: 4-Screen Payment Flow (Auto-Park & Screen Transition)',
+  description: 'Sequential 4-screen automated test: Enter PIN -> Select Amount -> Confirm OTP -> Complete (CNC auto parks & scans each screen)',
   device: 'Smartphone / POS Touch Rig',
   engine: 'CNC Robot Stylus + Multi-Screen Vision AI',
-  preconditions: 'Ứng dụng đã mở ở Màn hình 1 (Nhập mã PIN)',
-  expected: 'Tự động duyệt qua 4 màn hình, CNC đỗ an toàn trước mỗi lần quét trang mới',
+  preconditions: 'Application opened on Screen 1 (PIN Entry)',
+  expected: 'Automated traversal across 4 screens, CNC safely parks before scanning each screen',
   steps: [
-    // MÀN 1: Nhập PIN
-    { id: 1, action: 'CLICK', target: 'Numeric Key 1', value: '1', delay_ms: 450, screen: 'Màn 1: PIN', park_after: false, description: 'Màn 1: Bấm phím 1', status: 'idle' },
-    { id: 2, action: 'CLICK', target: 'Numeric Key 2', value: '2', delay_ms: 450, screen: 'Màn 1: PIN', park_after: false, description: 'Màn 1: Bấm phím 2', status: 'idle' },
-    { id: 3, action: 'CLICK', target: 'Numeric Key 3', value: '3', delay_ms: 450, screen: 'Màn 1: PIN', park_after: false, description: 'Màn 1: Bấm phím 3', status: 'idle' },
-    { id: 4, action: 'CLICK', target: 'Enter / OK Key', value: 'ENTER', delay_ms: 700, screen: 'Màn 1: PIN', park_after: true, description: 'Màn 1: Bấm Enter -> Lùi Park & Quét Màn 2', status: 'idle' },
+    // SCREEN 1: Enter PIN
+    { id: 1, action: 'CLICK', target: 'Numeric Key 1', value: '1', delay_ms: 450, screen: 'Screen 1: PIN', park_after: false, description: 'Screen 1: Tap key 1', status: 'idle' },
+    { id: 2, action: 'CLICK', target: 'Numeric Key 2', value: '2', delay_ms: 450, screen: 'Screen 1: PIN', park_after: false, description: 'Screen 1: Tap key 2', status: 'idle' },
+    { id: 3, action: 'CLICK', target: 'Numeric Key 3', value: '3', delay_ms: 450, screen: 'Screen 1: PIN', park_after: false, description: 'Screen 1: Tap key 3', status: 'idle' },
+    { id: 4, action: 'CLICK', target: 'Enter / OK Key', value: 'ENTER', delay_ms: 700, screen: 'Screen 1: PIN', park_after: true, description: 'Screen 1: Tap Enter -> Park & Scan Screen 2', status: 'idle' },
 
-    // MÀN 2: Chọn Số Tiền
-    { id: 5, action: 'CLICK', target: '500,000 đ', value: '500000', delay_ms: 500, screen: 'Màn 2: Số tiền', park_after: false, description: 'Màn 2: Chọn mệnh giá 500k', status: 'idle' },
-    { id: 6, action: 'CLICK', target: 'Tiếp tục', value: 'NEXT', delay_ms: 700, screen: 'Màn 2: Số tiền', park_after: true, description: 'Màn 2: Bấm Tiếp tục -> Lùi Park & Quét Màn 3', status: 'idle' },
+    // SCREEN 2: Select Amount
+    { id: 5, action: 'CLICK', target: '500,000 VND', value: '500000', delay_ms: 500, screen: 'Screen 2: Amount', park_after: false, description: 'Screen 2: Select 500k amount', status: 'idle' },
+    { id: 6, action: 'CLICK', target: 'Continue', value: 'NEXT', delay_ms: 700, screen: 'Screen 2: Amount', park_after: true, description: 'Screen 2: Tap Continue -> Park & Scan Screen 3', status: 'idle' },
 
-    // MÀN 3: Xác Nhận OTP
-    { id: 7, action: 'CLICK', target: 'Xác nhận OTP', value: 'CONFIRM', delay_ms: 700, screen: 'Màn 3: Xác nhận', park_after: true, description: 'Màn 3: Bấm Xác nhận -> Lùi Park & Quét Màn 4', status: 'idle' },
+    // SCREEN 3: Confirm OTP
+    { id: 7, action: 'CLICK', target: 'Confirm OTP', value: 'CONFIRM', delay_ms: 700, screen: 'Screen 3: Confirm', park_after: true, description: 'Screen 3: Tap Confirm -> Park & Scan Screen 4', status: 'idle' },
 
-    // MÀN 4: Biên Lai Hoàn Tất
-    { id: 8, action: 'VERIFY', target: 'Giao dịch thành công', value: 'SUCCESS', delay_ms: 800, screen: 'Màn 4: Biên lai', park_after: false, description: 'Màn 4: Xác thực kết quả thành công', status: 'idle' },
+    // SCREEN 4: Receipt Completion
+    { id: 8, action: 'VERIFY', target: 'Transaction Success', value: 'SUCCESS', delay_ms: 800, screen: 'Screen 4: Receipt', park_after: false, description: 'Screen 4: Verify transaction success', status: 'idle' },
   ],
 };
 
 export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
-  test_name: 'Test Scenario: Thanh Toán Tự Động Máy POS (5 Màn Hình Tuần Tự)',
-  description: 'Quy trình hoàn chỉnh trên thiết bị POS: Icon Payment -> Select Purchase -> Nhập tiền 123 -> Checkout (Tap to Pay) -> Nhập PIN 6 số -> Hoàn tất',
-  device: 'POS Terminal Machine (Màn hình cảm ứng & Bàn phím số)',
+  test_name: 'Test Scenario: POS Automated Payment Flow (5 Sequential Screens)',
+  description: 'Full automated workflow on POS device: Payment Icon -> Select Purchase -> Enter amount 123 -> Checkout (Tap to Pay) -> Enter 6-digit PIN -> Complete',
+  device: 'POS Terminal Machine (Touchscreen & Numeric Keypad)',
   engine: 'CNC Robot Stylus + Multi-Screen Auto-Park Vision AI',
-  preconditions: 'Máy POS đang ở màn hình chính (Home) có icon Payment',
-  expected: 'Chỉ cần chụp 1 ảnh thiết bị POS ban đầu tại Màn 1. Robot tự động thực thi tuần tự 6 giai đoạn màn hình (lùi Z về vị trí Park, chờ POS chuyển trang và bấm tiếp), xác nhận thanh toán thành công không cần chụp lại',
+  preconditions: 'POS machine is on Home screen with Payment icon',
+  expected: 'Only 1 initial snapshot of POS device on Screen 1 needed. Robot automatically executes 6 screen stages (parks Z axis, waits for screen transition and continues), verifying transaction success without re-capturing',
   steps: [
-    // MÀN 1: Màn hình chính (Home)
+    // SCREEN 1: Main Home Screen
     {
       id: 1,
       action: 'CLICK',
       target: 'Payment Icon',
       value: 'PAYMENT',
       delay_ms: 700,
-      screen: 'Màn 1: Home',
+      screen: 'Screen 1: Home',
       park_after: true,
-      description: 'Màn 1: Nhấn icon Payment -> CNC lùi Park & Chờ POS đổi màn sang Select Function Type',
+      description: 'Screen 1: Tap Payment icon -> CNC parks & waits for POS to switch to Select Function Type',
       status: 'idle',
     },
 
-    // MÀN 2: Select Function Type
+    // SCREEN 2: Select Function Type
     {
       id: 2,
       action: 'CLICK',
       target: 'Purchase',
       value: 'PURCHASE',
       delay_ms: 700,
-      screen: 'Màn 2: Function Type',
+      screen: 'Screen 2: Function Type',
       park_after: true,
-      description: 'Màn 2: Chọn Purchase trong Select Function Type -> Lùi Park & Chờ POS đổi màn sang nhập tiền',
+      description: 'Screen 2: Select Purchase -> CNC parks & waits for POS to switch to amount entry',
       status: 'idle',
     },
 
-    // MÀN 3: Nhập số tiền 123
+    // SCREEN 3: Enter Amount 123
     {
       id: 3,
       action: 'CLICK',
       target: 'Numeric Key 1',
       value: '1',
       delay_ms: 450,
-      screen: 'Màn 3: Nhập tiền',
+      screen: 'Screen 3: Amount Entry',
       park_after: false,
-      description: 'Màn 3: Bấm phím số 1',
+      description: 'Screen 3: Tap numeric key 1',
       status: 'idle',
     },
     {
@@ -151,9 +151,9 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Numeric Key 2',
       value: '2',
       delay_ms: 450,
-      screen: 'Màn 3: Nhập tiền',
+      screen: 'Screen 3: Amount Entry',
       park_after: false,
-      description: 'Màn 3: Bấm phím số 2',
+      description: 'Screen 3: Tap numeric key 2',
       status: 'idle',
     },
     {
@@ -162,9 +162,9 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Numeric Key 3',
       value: '3',
       delay_ms: 450,
-      screen: 'Màn 3: Nhập tiền',
+      screen: 'Screen 3: Amount Entry',
       park_after: false,
-      description: 'Màn 3: Bấm phím số 3 (Hoàn thành số tiền 123)',
+      description: 'Screen 3: Tap numeric key 3 (Complete amount 123)',
       status: 'idle',
     },
     {
@@ -173,9 +173,9 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Pay Button',
       value: 'PAY',
       delay_ms: 800,
-      screen: 'Màn 3: Nhập tiền',
+      screen: 'Screen 3: Amount Entry',
       park_after: true,
-      description: 'Màn 3: Bấm nút Pay -> Chuyển sang màn hình Checkout (Lùi Park & Chờ POS đổi màn)',
+      description: 'Screen 3: Tap Pay button -> Transition to Checkout screen (Park & wait for POS transition)',
       status: 'idle',
     },
 
@@ -186,9 +186,9 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Tap to Pay',
       value: 'TAP_TO_PAY',
       delay_ms: 600,
-      screen: 'Màn 4: Checkout',
+      screen: 'Screen 4: Checkout',
       park_after: false,
-      description: 'Màn 4: Chọn phương thức thanh toán Tap to Pay (tùy chọn: Insert Card / Swipe Card)',
+      description: 'Screen 4: Select payment method Tap to Pay (optional: Insert Card / Swipe Card)',
       status: 'idle',
     },
     {
@@ -197,22 +197,22 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Pay Now Button',
       value: 'PAY_NOW',
       delay_ms: 800,
-      screen: 'Màn 4: Checkout',
+      screen: 'Screen 4: Checkout',
       park_after: true,
-      description: 'Màn 4: Bấm Pay Now -> Chuyển sang màn hình nhập mã PIN (Lùi Park & Chờ POS đổi màn)',
+      description: 'Screen 4: Tap Pay Now -> Transition to PIN entry screen (Park & wait for POS transition)',
       status: 'idle',
     },
 
-    // MÀN 5: Nhập mã PIN 6 số bất kì (Ví dụ setup 1, 2, 3, 4, 5, 6)
+    // SCREEN 5: Enter 6-digit PIN (e.g. 1, 2, 3, 4, 5, 6)
     {
       id: 9,
       action: 'CLICK',
       target: 'Numeric Key 1',
       value: '1',
       delay_ms: 450,
-      screen: 'Màn 5: Nhập PIN',
+      screen: 'Screen 5: PIN Entry',
       park_after: false,
-      description: 'Màn 5: Bấm số PIN 1/6',
+      description: 'Screen 5: Enter PIN digit 1/6',
       status: 'idle',
     },
     {
@@ -221,9 +221,9 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Numeric Key 2',
       value: '2',
       delay_ms: 450,
-      screen: 'Màn 5: Nhập PIN',
+      screen: 'Screen 5: PIN Entry',
       park_after: false,
-      description: 'Màn 5: Bấm số PIN 2/6',
+      description: 'Screen 5: Enter PIN digit 2/6',
       status: 'idle',
     },
     {
@@ -232,9 +232,9 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Numeric Key 3',
       value: '3',
       delay_ms: 450,
-      screen: 'Màn 5: Nhập PIN',
+      screen: 'Screen 5: PIN Entry',
       park_after: false,
-      description: 'Màn 5: Bấm số PIN 3/6',
+      description: 'Screen 5: Enter PIN digit 3/6',
       status: 'idle',
     },
     {
@@ -243,9 +243,9 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Numeric Key 4',
       value: '4',
       delay_ms: 450,
-      screen: 'Màn 5: Nhập PIN',
+      screen: 'Screen 5: PIN Entry',
       park_after: false,
-      description: 'Màn 5: Bấm số PIN 4/6',
+      description: 'Screen 5: Enter PIN digit 4/6',
       status: 'idle',
     },
     {
@@ -254,9 +254,9 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Numeric Key 5',
       value: '5',
       delay_ms: 450,
-      screen: 'Màn 5: Nhập PIN',
+      screen: 'Screen 5: PIN Entry',
       park_after: false,
-      description: 'Màn 5: Bấm số PIN 5/6',
+      description: 'Screen 5: Enter PIN digit 5/6',
       status: 'idle',
     },
     {
@@ -265,9 +265,9 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Numeric Key 6',
       value: '6',
       delay_ms: 450,
-      screen: 'Màn 5: Nhập PIN',
+      screen: 'Screen 5: PIN Entry',
       park_after: false,
-      description: 'Màn 5: Bấm số PIN 6/6',
+      description: 'Screen 5: Enter PIN digit 6/6',
       status: 'idle',
     },
     {
@@ -276,9 +276,9 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Enter / OK Key',
       value: 'ENTER',
       delay_ms: 800,
-      screen: 'Màn 5: Nhập PIN',
+      screen: 'Screen 5: PIN Entry',
       park_after: true,
-      description: 'Màn 5: Bấm Enter/OK xác nhận mã PIN -> Lùi Park & Đợi POS duyệt giao dịch',
+      description: 'Screen 5: Tap Enter/OK to confirm PIN -> Park & wait for POS transaction approval',
       status: 'idle',
     },
     {
@@ -287,9 +287,9 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Transaction Approved / Success',
       value: 'APPROVED',
       delay_ms: 1000,
-      screen: 'Màn 6: Kết quả & In Bill',
+      screen: 'Screen 6: Result & Receipt',
       park_after: false,
-      description: 'Màn 6: Xác thực màn hình thông báo Giao dịch thành công (Approved / Payment Success)',
+      description: 'Screen 6: Verify display shows Transaction Successful (Approved / Payment Success)',
       status: 'idle',
     },
     {
@@ -298,9 +298,9 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
       target: 'Print Receipt Button',
       value: 'PRINT_BILL',
       delay_ms: 1500,
-      screen: 'Màn 6: Kết quả & In Bill',
+      screen: 'Screen 6: Result & Receipt',
       park_after: true,
-      description: 'Màn 6: Nhấn In Hóa Đơn (Print Bill) -> Máy POS kích hoạt máy in nhiệt in biên lai giấy giao dịch',
+      description: 'Screen 6: Tap Print Bill -> POS triggers thermal printer for paper receipt',
       status: 'idle',
     },
   ],
@@ -309,12 +309,13 @@ export const POS_TERMINAL_PAYMENT_FLOW_DATA = {
 // Helper: Format labels to professional English names
 export function formatLabelToEnglish(label) {
   if (!label) return 'Target Element';
-  const l = String(label).trim();
+  // Strip the backend multi-device prefix ("D1 Purchase", "D2 Refund")
+  const l = String(label).trim().replace(/^d\d+\s+/i, '');
   const lower = l.toLowerCase();
 
-  // Normalize numbers 0-9: e.g. "nut 1", "nút 1", "phím 1", "key 1", "button 1", "1"
-  const m = lower.match(/(?:nut|nút|phim|phím|key|button|số|so)?\s*([0-9])\b/);
-  if (m && !lower.includes('nhap') && !lower.includes('nhập') && !lower.includes('amount') && !lower.includes('tien') && !lower.includes('tiền')) {
+  // Normalize numbers 0-9 ONLY when the whole label is a key: "nut 1", "nút 1", "phím 1", "key 1", "button 1", "btn_1", "1"
+  const m = lower.match(/^(?:nut|nút|phim|phím|key|button|btn|số|so)?\s*[-_#]?\s*([0-9])$/);
+  if (m) {
     return `Key ${m[1]}`;
   }
 
@@ -390,7 +391,7 @@ export function createMockPosFrame() {
   ctx.fill();
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 40px system-ui, sans-serif';
-  ctx.fillText('💳', 340, 310);
+  // ctx.fillText('PAY', 340, 310);
   ctx.font = 'bold 22px system-ui, sans-serif';
   ctx.fillText('PAYMENT', 305, 360);
 
@@ -402,7 +403,7 @@ export function createMockPosFrame() {
   ctx.fill();
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 40px system-ui, sans-serif';
-  ctx.fillText('⚙️', 620, 310);
+  // ctx.fillText('SET', 620, 310);
   ctx.font = 'bold 22px system-ui, sans-serif';
   ctx.fillText('SETTINGS', 580, 360);
 
@@ -414,7 +415,7 @@ export function createMockPosFrame() {
   ctx.fill();
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 40px system-ui, sans-serif';
-  ctx.fillText('📊', 900, 310);
+  // ctx.fillText('REP', 900, 310);
   ctx.font = 'bold 22px system-ui, sans-serif';
   ctx.fillText('REPORTS', 865, 360);
 
@@ -428,7 +429,7 @@ export function createMockPosFrame() {
   ctx.font = 'bold 14px system-ui, sans-serif';
   ctx.fillText('TARGET #1: PAYMENT ICON (X: 120.5, Y: 85.0)', 235, 225);
 
-  // Corner marks (Góc 1: Park)
+  // Corner marks (Corner 1: Park)
   ctx.strokeStyle = '#fe5d70';
   ctx.lineWidth = 4;
   ctx.beginPath();
@@ -436,7 +437,7 @@ export function createMockPosFrame() {
   ctx.stroke();
   ctx.fillStyle = '#fe5d70';
   ctx.font = 'bold 14px system-ui, sans-serif';
-  ctx.fillText('📍 Góc 1: Vị Trí Park (Home)', 150, 40);
+  ctx.fillText('Corner 1: Park Position (Home)', 150, 40);
 
   return canvas.toDataURL('image/jpeg', 0.9);
 }
@@ -540,11 +541,11 @@ function generateSmartMockScript(rawPrompt, detectedTargets = []) {
     if (lower.includes('insert card') || lower.includes('insert')) {
       posData.steps[6].target = 'Insert Card';
       posData.steps[6].value = 'INSERT_CARD';
-      posData.steps[6].description = 'Màn 4: Chọn phương thức thanh toán Insert Card';
+      posData.steps[6].description = 'Screen 4: Select payment method Insert Card';
     } else if (lower.includes('swipe card') || lower.includes('swipe')) {
       posData.steps[6].target = 'Swipe Card';
       posData.steps[6].value = 'SWIPE_CARD';
-      posData.steps[6].description = 'Màn 4: Chọn phương thức thanh toán Swipe Card';
+      posData.steps[6].description = 'Screen 4: Select payment method Swipe Card';
     }
 
     // Dynamic adjustment for PIN if 6 specific digits mentioned
@@ -554,7 +555,7 @@ function generateSmartMockScript(rawPrompt, detectedTargets = []) {
         const digit = pinMatch[k];
         posData.steps[7 + k].target = `Numeric Key ${digit}`;
         posData.steps[7 + k].value = digit;
-        posData.steps[7 + k].description = `Màn 5: Bấm số PIN ${k}/6 (${digit})`;
+        posData.steps[7 + k].description = `Screen 5: Enter PIN digit ${k}/6 (${digit})`;
       }
     }
 
@@ -699,42 +700,42 @@ export const SCREEN_THEMES = [
     headerBg: 'bg-gradient-to-r from-[#404E67] to-[#2d3748]',
     badge: 'bg-teal-500/20 text-teal-200 border-teal-400/30',
     accentText: 'text-[#01a9ac]',
-    icon: '📱',
+    icon: null,
   },
   {
     cardBorder: 'border-slate-200',
     headerBg: 'bg-gradient-to-r from-[#404E67] to-[#2d3748]',
     badge: 'bg-teal-500/20 text-teal-200 border-teal-400/30',
     accentText: 'text-[#01a9ac]',
-    icon: '📂',
+    icon: null,
   },
   {
     cardBorder: 'border-slate-200',
     headerBg: 'bg-gradient-to-r from-[#404E67] to-[#2d3748]',
     badge: 'bg-teal-500/20 text-teal-200 border-teal-400/30',
     accentText: 'text-[#01a9ac]',
-    icon: '💵',
+    icon: null,
   },
   {
     cardBorder: 'border-slate-200',
     headerBg: 'bg-gradient-to-r from-[#404E67] to-[#2d3748]',
     badge: 'bg-teal-500/20 text-teal-200 border-teal-400/30',
     accentText: 'text-[#01a9ac]',
-    icon: '💳',
+    icon: null,
   },
   {
     cardBorder: 'border-slate-200',
     headerBg: 'bg-gradient-to-r from-[#404E67] to-[#2d3748]',
     badge: 'bg-teal-500/20 text-teal-200 border-teal-400/30',
     accentText: 'text-[#01a9ac]',
-    icon: '🔐',
+    icon: null,
   },
   {
     cardBorder: 'border-slate-200',
     headerBg: 'bg-gradient-to-r from-[#404E67] to-[#2d3748]',
     badge: 'bg-teal-500/20 text-teal-200 border-teal-400/30',
     accentText: 'text-[#01a9ac]',
-    icon: '🧾',
+    icon: null,
   },
 ];
 
@@ -753,7 +754,7 @@ export function groupStepsByScreen(steps) {
       }
       currentGroup = {
         id: groups.length + 1,
-        screenName: rawScreen || `Màn ${groups.length + 1}`,
+        screenName: rawScreen || `Screen ${groups.length + 1}`, 
         items: [],
       };
     }
@@ -784,7 +785,7 @@ export const ScreenWireframePreview = ({ screenName, capturedImage, isFirstScree
         <div className="relative rounded-lg overflow-hidden border border-teal-500/50 max-w-[240px] shadow-xs">
           <img src={capturedImage} alt="Real Device Capture" className="w-full h-32 object-cover" />
           <div className="absolute top-2 left-2 bg-slate-900/80 px-2 py-0.5 rounded text-[10px] font-mono text-emerald-300 border border-emerald-500/30">
-            📸 ẢNH THIẾT BỊ GỐC
+            ORIGINAL DEVICE PHOTO
           </div>
           <div className="absolute bottom-2 left-2 right-2 bg-teal-600/90 text-white text-[10px] font-bold px-1.5 py-0.5 rounded text-center backdrop-blur-xs">
             Target #1: Payment Icon
@@ -792,17 +793,17 @@ export const ScreenWireframePreview = ({ screenName, capturedImage, isFirstScree
         </div>
         <div className="flex-1 space-y-1.5 text-xs">
           <div className="flex items-center gap-2">
-            <span className="font-extrabold text-slate-900 text-sm">Màn 1: Giao diện chính POS (Home)</span>
+            <span className="font-extrabold text-slate-900 text-sm">Screen 1: Main POS Interface (Home)</span>
             <span className="bg-emerald-50 text-emerald-700 text-[10px] px-2 py-0.5 rounded-full font-bold border border-emerald-200">
-              Đã Đối Chiếu Camera
+              Camera Calibrated
             </span>
           </div>
           <p className="text-slate-600 text-[11px] leading-relaxed">
-            AI nhận diện trực tiếp từ ảnh chụp thiết bị &rarr; Icon <strong>Payment</strong> tại tọa độ CNC <code>X: 120.5, Y: 85.0</code>.
+            AI directly detects from device photo &rarr; <strong>Payment</strong> icon at CNC coords <code>X: 120.5, Y: 85.0</code>.
           </p>
           <div className="flex items-center gap-2 text-[10px] font-mono text-slate-600 pt-1">
-            <span className="bg-white px-2 py-0.5 rounded border border-slate-200 shadow-2xs">📍 Stylus: Park &rarr; Click</span>
-            <span className="bg-white px-2 py-0.5 rounded border border-slate-200 shadow-2xs">🔄 Sau bước: Lùi Z Park</span>
+            <span className="bg-white px-2 py-0.5 rounded border border-slate-200 shadow-2xs">Stylus: Park &rarr; Click</span>
+            <span className="bg-white px-2 py-0.5 rounded border border-slate-200 shadow-2xs">After step: Park Z</span>
           </div>
         </div>
       </div>
@@ -810,25 +811,25 @@ export const ScreenWireframePreview = ({ screenName, capturedImage, isFirstScree
   }
 
   // Screen 1: Home Menu Wireframe
-  if (lower.includes('home') || lower.includes('màn 1')) {
+  if (lower.includes('home') || lower.includes('screen 1') || lower.includes('màn 1')) {
     return (
       <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-slate-800 flex flex-col sm:flex-row gap-4 items-center">
         <div className="w-48 bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs flex flex-col justify-between h-28 text-slate-800">
           <div className="flex justify-between items-center text-[9px] text-slate-500 pb-1 border-b border-slate-100">
             <span className="font-semibold text-slate-700">SMART POS V3</span>
-            <span>10:24 AM 📶</span>
+            <span>10:24 AM</span>
           </div>
           <div className="grid grid-cols-3 gap-1.5 my-auto">
             <div className="bg-teal-50 border border-teal-300 rounded p-1 text-center">
-              <span className="text-xs block">💳</span>
+              <span className="text-[10px] font-bold text-teal-700 block">PAY</span>
               <span className="text-[8px] font-bold text-teal-800">PAYMENT</span>
             </div>
             <div className="bg-slate-50 rounded p-1 text-center border border-slate-100">
-              <span className="text-xs block">⚙️</span>
+              <span className="text-[10px] font-bold text-slate-400 block">SET</span>
               <span className="text-[8px] text-slate-400">SETTING</span>
             </div>
             <div className="bg-slate-50 rounded p-1 text-center border border-slate-100">
-              <span className="text-xs block">📊</span>
+              <span className="text-[10px] font-bold text-slate-400 block">REP</span>
               <span className="text-[8px] text-slate-400">REPORT</span>
             </div>
           </div>
@@ -836,11 +837,11 @@ export const ScreenWireframePreview = ({ screenName, capturedImage, isFirstScree
         </div>
         <div className="flex-1 text-xs space-y-1">
           <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-900">Giao diện Màn 1 do AI ngoại suy:</span>
+            <span className="font-bold text-slate-900">Screen 1 layout extrapolated by AI:</span>
             <span className="text-[10px] bg-slate-200/70 text-slate-700 px-2 py-0.2 rounded font-semibold">Home Dashboard</span>
           </div>
           <p className="text-[11px] text-slate-600 leading-relaxed">
-            Màn hình chính chứa các chức năng cơ bản. Stylus nhắm mục tiêu vào icon <strong>Payment</strong> để bắt đầu giao dịch.
+            Main screen contains basic functions. Stylus targets <strong>Payment</strong> icon to initiate transaction.
           </p>
         </div>
       </div>
@@ -848,7 +849,7 @@ export const ScreenWireframePreview = ({ screenName, capturedImage, isFirstScree
   }
 
   // Screen 2: Select Function Type Wireframe
-  if (lower.includes('function') || lower.includes('màn 2')) {
+  if (lower.includes('function') || lower.includes('screen 2') || lower.includes('màn 2')) {
     return (
       <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-slate-800 flex flex-col sm:flex-row gap-4 items-center">
         <div className="w-48 bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs flex flex-col justify-between h-28 text-slate-800">
@@ -857,30 +858,30 @@ export const ScreenWireframePreview = ({ screenName, capturedImage, isFirstScree
           </div>
           <div className="space-y-1 my-auto">
             <div className="bg-teal-50 border border-teal-300 rounded px-2 py-0.5 text-center flex items-center justify-between text-[9px] font-bold text-teal-800">
-              <span>🛒 PURCHASE (BÁN HÀNG)</span>
+              <span>PURCHASE</span>
               <span className="text-teal-600">●</span>
             </div>
             <div className="bg-slate-50 rounded px-2 py-0.5 text-center text-[9px] text-slate-400 border border-slate-100">
-              <span>↩️ REFUND (HOÀN TIỀN)</span>
+              <span>REFUND</span>
             </div>
           </div>
           <div className="text-[8px] text-teal-700 text-center font-mono font-semibold">Target: [Purchase Card]</div>
         </div>
         <div className="flex-1 text-xs space-y-1">
           <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-900">Giao diện Màn 2 do AI ngoại suy:</span>
+            <span className="font-bold text-slate-900">Screen 2 layout extrapolated by AI:</span>
             <span className="text-[10px] bg-slate-200/70 text-slate-700 px-2 py-0.2 rounded font-semibold">Function Type</span>
           </div>
           <p className="text-[11px] text-slate-600 leading-relaxed">
-            Menu chọn nghiệp vụ máy POS. AI nhận diện phương thức bán hàng thông thường là <strong>Purchase</strong> và điều hướng robot bấm chọn.
+            POS function selection menu. AI identifies standard transaction mode <strong>Purchase</strong> and directs robot to tap.
           </p>
         </div>
       </div>
     );
   }
 
-  // Screen 3: Nhập tiền Wireframe
-  if (lower.includes('tiền') || lower.includes('màn 3')) {
+  // Screen 3: Amount Entry Wireframe
+  if (lower.includes('amount') || lower.includes('tiền') || lower.includes('screen 3') || lower.includes('màn 3')) {
     return (
       <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-slate-800 flex flex-col sm:flex-row gap-4 items-center">
         <div className="w-48 bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs flex flex-col justify-between h-28 text-slate-800">
@@ -889,17 +890,17 @@ export const ScreenWireframePreview = ({ screenName, capturedImage, isFirstScree
             $123.00
           </div>
           <div className="flex justify-between items-center text-[9px] pt-1">
-            <span className="text-slate-500 font-mono">Phím: 1 &rarr; 2 &rarr; 3</span>
+            <span className="text-slate-500 font-mono">Keys: 1 &rarr; 2 &rarr; 3</span>
             <span className="bg-teal-600 text-white px-2 py-0.5 rounded font-bold">PAY &gt;&gt;</span>
           </div>
         </div>
         <div className="flex-1 text-xs space-y-1">
           <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-900">Giao diện Màn 3 do AI ngoại suy:</span>
+            <span className="font-bold text-slate-900">Screen 3 layout extrapolated by AI:</span>
             <span className="text-[10px] bg-slate-200/70 text-slate-700 px-2 py-0.2 rounded font-semibold">Amount Input</span>
           </div>
           <p className="text-[11px] text-slate-600 leading-relaxed">
-            Bàn phím nhập số tiền thanh toán. Robot bấm tuần tự các phím số <strong>1, 2, 3</strong> sau đó nhấn nút <strong>Pay</strong> để chuyển sang bước kiểm tra thẻ.
+            Numeric keypad for payment amount entry. Robot sequentially taps keys <strong>1, 2, 3</strong> then taps <strong>Pay</strong> to proceed to card verification.
           </p>
         </div>
       </div>
@@ -907,20 +908,20 @@ export const ScreenWireframePreview = ({ screenName, capturedImage, isFirstScree
   }
 
   // Screen 4: Checkout Option Wireframe
-  if (lower.includes('checkout') || lower.includes('màn 4')) {
+  if (lower.includes('checkout') || lower.includes('screen 4') || lower.includes('màn 4')) {
     return (
       <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-slate-800 flex flex-col sm:flex-row gap-4 items-center">
         <div className="w-48 bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs flex flex-col justify-between h-28 text-slate-800">
           <div className="text-[9px] text-slate-500 text-center font-bold">CHOOSE PAYMENT</div>
           <div className="grid grid-cols-3 gap-1 text-[8px] my-auto">
             <div className="bg-teal-50 border border-teal-300 rounded p-1 text-center font-bold text-teal-800">
-              <span className="block text-[10px]">📶</span>TAP
+              TAP
             </div>
             <div className="bg-slate-50 rounded p-1 text-center text-slate-400 border border-slate-100">
-              <span className="block text-[10px]">💳</span>CHIP
+              CHIP
             </div>
             <div className="bg-slate-50 rounded p-1 text-center text-slate-400 border border-slate-100">
-              <span className="block text-[10px]">〰️</span>SWIPE
+              SWIPE
             </div>
           </div>
           <div className="bg-teal-600 text-white text-center font-bold text-[9px] py-0.5 rounded">
@@ -929,19 +930,19 @@ export const ScreenWireframePreview = ({ screenName, capturedImage, isFirstScree
         </div>
         <div className="flex-1 text-xs space-y-1">
           <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-900">Giao diện Màn 4 do AI ngoại suy:</span>
+            <span className="font-bold text-slate-900">Screen 4 layout extrapolated by AI:</span>
             <span className="text-[10px] bg-slate-200/70 text-slate-700 px-2 py-0.2 rounded font-semibold">Checkout Option</span>
           </div>
           <p className="text-[11px] text-slate-600 leading-relaxed">
-            Chọn hình thức quẹt/chạm thẻ. AI thiết lập chọn <strong>Tap to Pay</strong> (NFC contactless) rồi bấm <strong>Pay Now</strong> chuyển sang bước xác thực bảo mật.
+            Select card payment method. AI configures <strong>Tap to Pay</strong> (NFC contactless) then taps <strong>Pay Now</strong> to proceed to security verification.
           </p>
         </div>
       </div>
     );
   }
 
-  // Screen 5: Nhập PIN Wireframe
-  if (lower.includes('pin') || lower.includes('màn 5')) {
+  // Screen 5: PIN Entry Wireframe
+  if (lower.includes('pin') || lower.includes('screen 5') || lower.includes('màn 5')) {
     return (
       <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-slate-800 flex flex-col sm:flex-row gap-4 items-center">
         <div className="w-48 bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs flex flex-col justify-between h-28 text-slate-800">
@@ -950,44 +951,44 @@ export const ScreenWireframePreview = ({ screenName, capturedImage, isFirstScree
             <span>●</span><span>●</span><span>●</span><span>●</span><span>●</span><span>●</span>
           </div>
           <div className="flex justify-between items-center text-[9px]">
-            <span className="text-slate-500 font-mono">Phím: 1,2,3,4,5,6</span>
-            <span className="bg-teal-600 text-white px-2 py-0.5 rounded font-bold">ENTER ✓</span>
+            <span className="text-slate-500 font-mono">Keys: 1,2,3,4,5,6</span>
+            <span className="bg-teal-600 text-white px-2 py-0.5 rounded font-bold">ENTER</span>
           </div>
         </div>
         <div className="flex-1 text-xs space-y-1">
           <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-900">Giao diện Màn 5 do AI ngoại suy:</span>
+            <span className="font-bold text-slate-900">Screen 5 layout extrapolated by AI:</span>
             <span className="text-[10px] bg-slate-200/70 text-slate-700 px-2 py-0.2 rounded font-semibold">PIN Authentication</span>
           </div>
           <p className="text-[11px] text-slate-600 leading-relaxed">
-            Bàn phím nhập mã PIN bảo mật 6 số. Robot bấm tuần tự 6 phím số đã cấu hình rồi bấm <strong>Enter / OK</strong> để xác nhận chủ thẻ.
+            6-digit security PIN keypad. Robot sequentially taps the 6 configured numeric keys then taps <strong>Enter / OK</strong> to authenticate cardholder.
           </p>
         </div>
       </div>
     );
   }
 
-  // Screen 6: Kết quả & In Bill Wireframe
+  // Screen 6: Result & Print Bill Wireframe
   return (
     <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-slate-800 flex flex-col sm:flex-row gap-4 items-center">
       <div className="w-48 bg-white p-2.5 rounded-lg border border-slate-200 shadow-xs flex flex-col justify-between h-28 text-slate-800">
         <div className="flex items-center justify-center gap-1 text-emerald-600 text-[10px] font-extrabold pt-1">
-          <span>✓</span> APPROVED SUCCESS
+          APPROVED SUCCESS
         </div>
         <div className="bg-slate-50 rounded px-2 py-1 text-center text-[9px] font-mono text-slate-600 border border-slate-100">
-          🧾 RECEIPT #8841<br />Total: $123.00
+          RECEIPT #8841<br />Total: $123.00
         </div>
         <div className="bg-emerald-600 text-white text-center font-bold text-[9px] py-0.5 rounded flex items-center justify-center gap-1">
-          <span>🖨️</span> IN HÓA ĐƠN (PRINT)
+          PRINT BILL (RECEIPT)
         </div>
       </div>
       <div className="flex-1 text-xs space-y-1">
         <div className="flex items-center gap-2">
-          <span className="font-bold text-slate-900">Giao diện Màn 6 do AI ngoại suy:</span>
+          <span className="font-bold text-slate-900">Screen 6 layout extrapolated by AI:</span>
           <span className="text-[10px] bg-slate-200/70 text-slate-700 px-2 py-0.2 rounded font-semibold">Approved & Print</span>
         </div>
         <p className="text-[11px] text-slate-600 leading-relaxed">
-          Màn hình thông báo giao dịch thành công. Robot kiểm tra kết quả qua OCR và bấm nút <strong>In Hóa Đơn (Print Bill)</strong> để máy POS in biên lai nhiệt kết thúc quy trình.
+          Transaction successful screen. Robot verifies result via OCR and taps <strong>Print Bill</strong> to print paper receipt and complete process.
         </p>
       </div>
     </div>
@@ -1060,7 +1061,7 @@ const AiTestWorkbench = ({
   // Capture device screen and automatically generate the 5-screen POS payment script
   const handleCaptureAndGenerate = async () => {
     setIsCapturing(true);
-    const toastId = toast.loading('Đang chụp màn hình thiết bị từ camera...');
+    const toastId = toast.loading('Capturing device screen from camera...');
 
     try {
       const frameData = captureFrameFromVideo();
@@ -1069,10 +1070,10 @@ const AiTestWorkbench = ({
       setCapturedTimestamp(timeStr);
       setCapturedScreens((prev) => ({
         ...prev,
-        'Màn 1: Home': frameData,
+        'Screen 1: Home': frameData,
       }));
 
-      toast.loading('AI đang phân tích màn hình thiết bị & sinh kịch bản...', { id: toastId });
+      toast.loading('AI is analyzing device screen & generating script...', { id: toastId });
 
       // Run generation with rich POS flow
       await new Promise((r) => setTimeout(r, 450));
@@ -1085,11 +1086,11 @@ const AiTestWorkbench = ({
       setHasGenerated(true);
 
       toast.success(
-        `Đã chụp màn hình thiết bị (${timeStr}) & tự động sinh ${enrichedSteps.length} bước thanh toán POS!`,
+        `Captured device screen (${timeStr}) & automatically generated ${enrichedSteps.length} POS payment steps!`,
         { id: toastId, duration: 4000 }
       );
     } catch (err) {
-      toast.error('Lỗi khi chụp hoặc sinh kịch bản: ' + err.message, { id: toastId });
+      toast.error('Error capturing or generating script: ' + err.message, { id: toastId });
     } finally {
       setIsCapturing(false);
     }
@@ -1103,7 +1104,7 @@ const AiTestWorkbench = ({
       ...prev,
       [screenName]: frameData,
     }));
-    toast.success(`Đã chụp ảnh màn hình cho "${screenName}" lúc ${timeStr}!`);
+    toast.success(`Captured screen snapshot for "${screenName}" at ${timeStr}!`);
   };
 
   // Handle upload image from disk as fallback
@@ -1118,9 +1119,9 @@ const AiTestWorkbench = ({
       setCapturedTimestamp(timeStr);
       setCapturedScreens((prev) => ({
         ...prev,
-        'Màn 1: Home': dataUrl,
+        'Screen 1: Home': dataUrl,
       }));
-      toast.success('Đã nạp ảnh thiết bị thành công!');
+      toast.success('Device image loaded successfully!');
     };
     reader.readAsDataURL(file);
   };
@@ -1240,12 +1241,12 @@ const AiTestWorkbench = ({
     const newStep = {
       id: newId,
       action: 'CLICK',
-      target: `Phím / Nút mới`,
+      target: `New Key / Button`,
       value: '',
       delay_ms: 600,
       screen: screenName,
       park_after: false,
-      description: `Thao tác trên ${screenName}`,
+      description: `Action on ${screenName}`,
       status: 'idle',
     };
     setTestScript((prev) => {
@@ -1257,12 +1258,12 @@ const AiTestWorkbench = ({
       }
       return next;
     });
-    toast.success(`Đã thêm bước mới vào ${screenName}`);
+    toast.success(`Added new step to ${screenName}`);
   };
 
   const handleAddStep = () => {
     const newId = testScript.length > 0 ? Math.max(...testScript.map((s) => s.id || 0)) + 1 : 1;
-    const lastScreen = testScript.length > 0 ? (testScript[testScript.length - 1].screen || 'Màn 1') : 'Màn 1: Home';
+    const lastScreen = testScript.length > 0 ? (testScript[testScript.length - 1].screen || 'Screen 1') : 'Screen 1: Home';
     const newStep = {
       id: newId,
       action: 'CLICK',
@@ -1355,7 +1356,7 @@ const AiTestWorkbench = ({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3 text-white">
-              <span className="font-extrabold text-sm">Ảnh Chụp Màn Hình Thiết Bị POS (Gốc)</span>
+              <span className="font-extrabold text-sm">Device Screen Snapshot (Original)</span>
               <button
                 type="button"
                 onClick={() => setPreviewModalImg(null)}
@@ -1376,35 +1377,35 @@ const AiTestWorkbench = ({
       {/* ===================================================================
           CARD 0: LIVE DEVICE CAMERA & SCREEN CAPTURE (USER REQUEST)
           =================================================================== */}
-      <div className="bg-slate-900 rounded-2xl border border-slate-800 shadow-md overflow-hidden text-white relative">
-        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 via-teal-400 to-[#01a9ac]" />
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden relative">
+        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-[#01a9ac] via-[#0ac282] to-[#0df3a3]" />
 
         {/* Top Header of Video Card */}
-        <div className="px-5 py-3.5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-2.5">
-            <span className="p-1.5 rounded-lg bg-emerald-500/20 text-[#0ac282] border border-emerald-500/30">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="px-6 py-4 bg-white border-b border-slate-100 flex items-center justify-between flex-wrap gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-teal-50 text-[#01a9ac] border border-teal-100 flex items-center justify-center shrink-0 shadow-2xs">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
               </svg>
-            </span>
+            </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-extrabold text-white tracking-wide">
-                  Camera Giám Sát Thiết Bị (Live Device Screen View)
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-base font-extrabold text-slate-900 tracking-tight">
+                  Device Monitor Camera
                 </h3>
                 {isCameraActive ? (
-                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                    LIVE FEED
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    LIVE VIEWPORT
                   </span>
                 ) : (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                    PAUSED
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                    STANDBY
                   </span>
                 )}
               </div>
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                Quan sát màn hình POS thực tế qua camera & Chụp màn hình để tự động sinh các bước test tương ứng
+              <p className="text-xs text-slate-500 mt-0.5">
+                Live video feed for optical element detection and automated stylus test coordinate mapping
               </p>
             </div>
           </div>
@@ -1413,15 +1414,15 @@ const AiTestWorkbench = ({
           <div className="flex items-center gap-2 flex-wrap text-xs">
             {/* Camera Select */}
             {cameras.length > 0 && (
-              <div className="flex items-center gap-1.5 bg-slate-800/90 px-2.5 py-1 rounded-lg border border-slate-700">
-                <span className="text-slate-400 text-[11px]">Cam:</span>
+              <div className="flex items-center gap-1.5 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700">
+                <span className="text-slate-400 text-[11px] font-semibold uppercase">Source:</span>
                 <select
                   value={selectedCameraId}
                   onChange={(e) => onSelectCamera && onSelectCamera(e.target.value)}
-                  className="bg-transparent text-white text-xs outline-none cursor-pointer pr-1"
+                  className="bg-transparent text-slate-800 text-xs font-semibold outline-none cursor-pointer pr-1"
                 >
                   {cameras.map((c, i) => (
-                    <option key={c.deviceId || i} value={c.deviceId} className="bg-slate-900 text-white">
+                    <option key={c.deviceId || i} value={c.deviceId} className="bg-white text-slate-800">
                       {c.label || `Camera ${i + 1}`}
                     </option>
                   ))}
@@ -1433,8 +1434,8 @@ const AiTestWorkbench = ({
             <button
               type="button"
               onClick={() => onRefreshCameras && onRefreshCameras()}
-              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition-colors cursor-pointer"
-              title="Làm mới danh sách camera"
+              className="p-2 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+              title="Refresh camera list"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -1445,57 +1446,57 @@ const AiTestWorkbench = ({
             <button
               type="button"
               onClick={() => setShowGuides(!showGuides)}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
                 showGuides
-                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                  : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200'
+                  ? 'bg-teal-50 text-teal-700 border-teal-200 shadow-2xs font-bold'
+                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
               }`}
             >
-              {showGuides ? '✓ Khung Căn Chỉnh' : '+ Khung Căn Chỉnh'}
+              {showGuides ? 'Alignment Guides: Active' : 'Alignment Guides: Off'}
             </button>
 
             {/* Toggle Camera On/Off */}
             <button
               type="button"
               onClick={() => onToggleCamera && onToggleCamera()}
-              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] font-semibold border border-slate-700 transition-colors cursor-pointer"
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold border border-slate-200 transition-colors cursor-pointer"
             >
-              {isCameraActive ? 'Tắt Camera' : 'Bật Camera'}
+              {isCameraActive ? 'Disable Camera' : 'Enable Camera'}
             </button>
           </div>
         </div>
 
         {/* Video Canvas Body */}
-        <div className="p-4 bg-slate-950 flex flex-col md:flex-row gap-4 items-stretch">
+        <div className="p-5 bg-slate-50/70 border-t border-slate-100 flex flex-col lg:flex-row gap-5 items-stretch">
           {/* Main Video Screen with HUD */}
-          <div className="relative flex-1 bg-black rounded-xl overflow-hidden min-h-[260px] max-h-[420px] flex items-center justify-center border border-slate-800 group shadow-inner">
+          <div className="relative flex-1 bg-slate-950 rounded-2xl overflow-hidden min-h-[300px] max-h-[440px] flex items-center justify-center border border-slate-800 shadow-sm group">
             <video
               ref={videoRef}
               autoPlay
               playsInline
               muted
-              className={`w-full h-full max-h-[380px] object-contain ${!isCameraActive ? 'hidden' : ''}`}
+              className={`w-full h-full max-h-[400px] object-contain ${!isCameraActive ? 'hidden' : ''}`}
             />
 
             {/* If camera is inactive or has error */}
             {(!isCameraActive || cameraError) && (
-              <div className="p-6 text-center max-w-md">
-                <div className="w-12 h-12 rounded-full bg-slate-800 text-slate-400 mx-auto flex items-center justify-center mb-3">
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+              <div className="p-8 text-center max-w-md">
+                <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 text-slate-400 mx-auto flex items-center justify-center mb-3.5 shadow-inner">
+                  <svg className="w-7 h-7 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
                   </svg>
                 </div>
-                <h4 className="text-sm font-bold text-slate-200">Camera Chưa Kết Nối Hoặc Bị Tắt</h4>
-                <p className="text-xs text-slate-400 mt-1 mb-4 leading-relaxed">
-                  {cameraError || 'Bấm "Bật Lại Camera" hoặc bấm "Dùng Ảnh Mẫu POS" để tiếp tục quy trình test.'}
+                <h4 className="text-sm font-bold text-slate-200 tracking-tight">Camera Feed Inactive</h4>
+                <p className="text-xs text-slate-400 mt-1 mb-5 leading-relaxed">
+                  {cameraError || 'Activate the camera stream or load a calibrated POS sample snapshot to continue.'}
                 </p>
-                <div className="flex items-center justify-center gap-2">
+                <div className="flex items-center justify-center gap-2.5 flex-wrap">
                   <button
                     type="button"
                     onClick={() => onToggleCamera && onToggleCamera()}
-                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition-all cursor-pointer"
+                    className="px-4 py-2 bg-[#0ac282] hover:bg-[#09ad74] active:scale-98 text-white text-xs font-bold rounded-lg shadow-sm transition-all cursor-pointer"
                   >
-                    Bật Lại Camera
+                    Enable Camera
                   </button>
                   <button
                     type="button"
@@ -1503,12 +1504,12 @@ const AiTestWorkbench = ({
                       const mockFrame = createMockPosFrame();
                       setCapturedImage(mockFrame);
                       setCapturedTimestamp(new Date().toLocaleTimeString('vi-VN'));
-                      setCapturedScreens((prev) => ({ ...prev, 'Màn 1: Home': mockFrame }));
-                      toast.success('Đã nạp khung hình thiết bị POS mẫu');
+                      setCapturedScreens((prev) => ({ ...prev, 'Screen 1: Home': mockFrame }));
+                      toast.success('Sample POS device frame loaded');
                     }}
-                    className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition-all cursor-pointer"
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition-all cursor-pointer"
                   >
-                    Dùng Ảnh Mẫu POS
+                    Load POS Sample
                   </button>
                 </div>
               </div>
@@ -1516,119 +1517,128 @@ const AiTestWorkbench = ({
 
             {/* Overlay Guides */}
             {isCameraActive && showGuides && (
-              <div className="absolute inset-0 pointer-events-none p-4 flex flex-col justify-between">
+              <div className="absolute inset-0 pointer-events-none p-5 flex flex-col justify-between">
                 {/* Top Corner brackets */}
                 <div className="flex justify-between items-start">
                   <div className="flex flex-col items-start">
-                    <div className="w-8 h-8 border-t-2 border-l-2 border-[#fe5d70]" />
-                    <span className="text-[10px] font-bold text-[#fe5d70] bg-black/70 px-1.5 py-0.5 rounded mt-1 backdrop-blur-xs">
-                      📍 Góc 1: Park (Home)
+                    <div className="w-9 h-9 border-t-2 border-l-2 border-[#fe5d70]" />
+                    <span className="text-[10px] font-bold text-[#fe5d70] bg-black/80 px-2 py-0.5 rounded mt-1 backdrop-blur-xs font-mono">
+                      Corner 1: Park (Home)
                     </span>
                   </div>
-                  <div className="w-8 h-8 border-t-2 border-r-2 border-emerald-400" />
+                  <div className="w-9 h-9 border-t-2 border-r-2 border-teal-400" />
                 </div>
 
                 {/* Center Reticle */}
-                <div className="self-center flex items-center justify-center text-emerald-400/50">
-                  <div className="w-12 h-12 border border-dashed border-emerald-400/40 rounded-full flex items-center justify-center">
+                <div className="self-center flex items-center justify-center text-teal-400/60">
+                  <div className="w-14 h-14 border border-dashed border-teal-400/40 rounded-full flex items-center justify-center">
                     <span className="text-sm font-mono">+</span>
                   </div>
                 </div>
 
                 {/* Bottom Corner brackets */}
                 <div className="flex justify-between items-end">
-                  <div className="w-8 h-8 border-b-2 border-l-2 border-emerald-400" />
-                  <div className="w-8 h-8 border-b-2 border-r-2 border-emerald-400" />
+                  <div className="w-9 h-9 border-b-2 border-l-2 border-teal-400" />
+                  <div className="w-9 h-9 border-b-2 border-r-2 border-teal-400" />
                 </div>
               </div>
             )}
 
             {/* Camera Status Label HUD */}
             {isCameraActive && (
-              <div className="absolute bottom-2 left-3 pointer-events-none flex items-center gap-2">
-                <span className="px-2 py-0.5 bg-black/70 backdrop-blur-md rounded text-[10px] font-mono text-emerald-400 border border-emerald-500/20">
-                  TARGET AREA: POS TERMINAL VIEWPORT
+              <div className="absolute bottom-3 left-3 pointer-events-none flex items-center gap-2">
+                <span className="px-2.5 py-1 bg-black/80 backdrop-blur-md rounded-md text-[10px] font-mono text-teal-300 border border-teal-500/20 shadow-xs">
+                  VIEWPORT: POS TERMINAL WORKSPACE
                 </span>
               </div>
             )}
           </div>
 
           {/* Right Action & Snapshot Column */}
-          <div className="w-full md:w-80 flex flex-col justify-between space-y-3 bg-slate-900/90 p-4 rounded-xl border border-slate-800">
+          <div className="w-full lg:w-88 flex flex-col justify-between space-y-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
             <div>
-              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                <span className="text-xs font-bold text-slate-300">Ảnh Chụp Thiết Bị</span>
-                {capturedTimestamp && (
-                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Device Snapshot</span>
+                {capturedTimestamp ? (
+                  <span className="text-[11px] font-mono text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 font-bold">
                     {capturedTimestamp}
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-medium text-slate-400">
+                    Not Captured
                   </span>
                 )}
               </div>
 
               {/* Captured Thumbnail View */}
               {capturedImage ? (
-                <div className="mt-2.5 space-y-2">
+                <div className="mt-3 space-y-2.5">
                   <div
                     onClick={() => setPreviewModalImg(capturedImage)}
-                    className="relative rounded-lg overflow-hidden border border-emerald-500/40 bg-black cursor-pointer group hover:border-emerald-400 transition-all shadow-xs"
-                    title="Bấm để xem ảnh phóng to"
+                    className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 cursor-pointer group hover:border-[#01a9ac] transition-all shadow-xs"
+                    title="Click to view enlarged image"
                   >
                     <img
                       src={capturedImage}
                       alt="Captured POS Screen"
-                      className="w-full h-32 object-cover transition-transform duration-300 group-hover:scale-105"
+                      className="w-full h-36 object-cover transition-transform duration-300 group-hover:scale-105"
                     />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-xs text-white font-bold backdrop-blur-2xs">
+                    <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-xs text-white font-bold backdrop-blur-2xs">
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" />
                       </svg>
-                      <span>Xem Phóng To</span>
+                      <span>View Enlarged</span>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between text-[11px] text-slate-400">
-                    <span className="flex items-center gap-1 text-emerald-400 font-semibold">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                      Đã gán vào quy trình test
+                  <div className="flex items-center justify-between text-[11px] text-slate-500">
+                    <span className="flex items-center gap-1.5 text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/60">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      Assigned to pipeline
                     </span>
                     <button
                       type="button"
                       onClick={() => {
                         setCapturedImage(null);
                         setCapturedTimestamp('');
-                        toast('Đã xóa snapshot hiện tại');
+                        toast('Deleted current snapshot');
                       }}
-                      className="text-red-400 hover:text-red-300 transition-colors cursor-pointer"
+                      className="text-rose-500 hover:text-rose-700 font-semibold transition-colors cursor-pointer"
                     >
-                      Xóa
+                      Delete
                     </button>
                   </div>
                 </div>
               ) : (
-                <div className="mt-2.5 p-4 rounded-lg border border-dashed border-slate-700 text-center text-slate-500 bg-slate-950/40">
-                  <span className="text-2xl block mb-1">📷</span>
-                  <p className="text-xs font-medium text-slate-400">Chưa có ảnh chụp thiết bị</p>
-                  <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                    Bấm nút xanh bên dưới để chụp màn hình từ camera và tự động sinh kịch bản test!
+                <div className="mt-3 p-6 rounded-xl border border-dashed border-slate-200 text-center bg-slate-50/70 flex flex-col items-center justify-center">
+                  <div className="w-10 h-10 rounded-xl bg-teal-50 border border-teal-100 text-[#01a9ac] flex items-center justify-center mb-2.5">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                  </div>
+                  <p className="text-xs font-bold text-slate-700">No snapshot captured yet</p>
+                  <p className="text-[11px] text-slate-500 mt-1 max-w-[210px] leading-relaxed">
+                    Capture the device screen to automatically recognize elements and generate test steps.
                   </p>
                 </div>
               )}
             </div>
 
             {/* Action Buttons */}
-            <div className="space-y-2 pt-2">
+            <div className="space-y-2.5 pt-2">
               {/* MAIN HERO BUTTON: CAPTURE & AUTO-GENERATE */}
               <button
                 type="button"
                 onClick={handleCaptureAndGenerate}
                 disabled={isCapturing || isExecuting}
-                className="w-full py-3 px-4 bg-gradient-to-r from-[#0ac282] to-[#01a9ac] hover:from-[#09ad74] hover:to-[#01989b] active:scale-[0.98] disabled:opacity-50 text-white text-xs font-extrabold rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 group"
+                className="w-full py-3.5 px-4 bg-gradient-to-r from-[#0ac282] to-[#01a9ac] hover:from-[#09ad74] hover:to-[#01989b] active:scale-[0.98] disabled:opacity-50 text-white text-xs font-extrabold rounded-xl shadow-xs hover:shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 group"
               >
                 <svg className="w-4 h-4 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
                 <span>
-                  {isCapturing ? 'Đang Chụp & Phân Tích...' : '📸 Chụp Màn Hình & Tự Động Sinh Kịch Bản'}
+                  {isCapturing ? 'Capturing & Analyzing...' : 'Capture Screen & Auto-Generate Script'}
                 </span>
               </button>
 
@@ -1640,16 +1650,16 @@ const AiTestWorkbench = ({
                     const timeStr = new Date().toLocaleTimeString('vi-VN');
                     setCapturedImage(frame);
                     setCapturedTimestamp(timeStr);
-                    toast.success(`Đã chụp snapshot màn hình lúc ${timeStr}`);
+                    toast.success(`Captured screen snapshot at ${timeStr}`);
                   }}
                   disabled={isExecuting}
-                  className="flex-1 py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-semibold rounded-lg border border-slate-700 transition-colors cursor-pointer"
+                  className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg border border-slate-200 transition-colors text-center cursor-pointer"
                 >
-                  Chụp Lại Ảnh
+                  Capture Snapshot
                 </button>
 
-                <label className="flex-1 py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-semibold rounded-lg border border-slate-700 transition-colors text-center cursor-pointer">
-                  <span>Tải Ảnh Lên</span>
+                <label className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg border border-slate-200 transition-colors text-center cursor-pointer">
+                  <span>Upload Image</span>
                   <input
                     type="file"
                     accept="image/*"
@@ -1678,8 +1688,8 @@ const AiTestWorkbench = ({
               </span> */}
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              Sẵn sàng tạo kịch bản thanh toán POS tự động. Bấm{' '}
-              <strong>Generate AI Recommendation</strong> để nạp toàn bộ các bước thanh toán máy POS (chọn icon payment, purchase, nhập tiền 123, checkout, nhập PIN 6 số).
+              Ready to generate automated POS payment script. Click{' '}
+              <strong>Generate AI Recommendation</strong> to generate all POS payment steps (select payment icon, purchase, enter 123, checkout, enter 6-digit PIN).
             </p>
           </div>
 
@@ -1703,24 +1713,24 @@ const AiTestWorkbench = ({
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
-                onClick={() => setPrompt('Quy trình máy POS: 1. Chọn icon Payment -> 2. Chọn Purchase tại Select Function Type -> 3. Nhập số tiền 123 và bấm Pay -> 4. Màn Checkout chọn Tap to Pay rồi bấm Pay Now -> 5. Nhập mã PIN 6 số (123456) bấm OK')}
+                onClick={() => setPrompt('POS Terminal Flow: 1. Tap Payment icon -> 2. Select Purchase at Function Type -> 3. Enter amount 123 and tap Pay -> 4. Checkout screen: select Tap to Pay then Pay Now -> 5. Enter 6-digit PIN (123456) and tap OK -> 6. Confirm successful transaction and Print Bill')}
                 className="text-[11px] font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 px-2.5 py-1 rounded-md border border-amber-200 transition-all cursor-pointer shadow-xs"
               >
-                💳 POS 5-Màn: Icon → Purchase → 123 → Checkout → PIN 6 số
+                POS 5-Screen: Icon &rarr; Purchase &rarr; 123 &rarr; Checkout &rarr; 6-Digit PIN
               </button>
               <button
                 type="button"
                 onClick={() => setPrompt('ATM PIN verification: Press keys 1, 2, 3, 4 sequentially then press Enter/OK to authenticate')}
                 className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-md border border-emerald-200 transition-all cursor-pointer"
               >
-                🏧 1 Màn: ATM PIN
+                1-Screen: ATM PIN
               </button>
               <button
                 type="button"
-                onClick={() => setPrompt('Thanh toán ví điện tử 4 màn hình: Nhập mã PIN (1, 2, 3) rồi Enter chuyển sang Màn 2 -> Chọn số tiền 500.000đ bấm Tiếp tục -> Bấm Xác nhận OTP -> Hoàn tất giao dịch')}
+                onClick={() => setPrompt('E-wallet 4-screen payment: Enter PIN (1, 2, 3) then Enter to Screen 2 -> Select amount 500,000 VND and tap Continue -> Tap Confirm OTP -> Complete transaction')}
                 className="text-[11px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-md border border-indigo-200 transition-all cursor-pointer"
               >
-                📱 4 Màn: Ví Điện Tử
+                4-Screen: E-Wallet
               </button>
             </div>
           </div>
@@ -1735,7 +1745,7 @@ const AiTestWorkbench = ({
 
           <div className="flex items-center justify-between flex-wrap gap-3 pt-1">
             {/* <span className="text-xs text-slate-500">
-              💡 Automated entity extractor maps PIN keys (1, 2, 3, 4), Enter/OK key, and banking menu verification.
+              Automated entity extractor maps PIN keys (1, 2, 3, 4), Enter/OK key, and banking menu verification.
             </span> */}
 
             {/* THE REQUESTED BUTTON: GENERATE AI RECOMMENDATION */}
@@ -1764,9 +1774,9 @@ const AiTestWorkbench = ({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
           </div>
-          <h4 className="text-base font-bold text-slate-800">Kịch Bản Thanh Toán POS Sẵn Sàng Tạo</h4>
+          <h4 className="text-base font-bold text-slate-800">POS Payment Scenario Ready to Generate</h4>
           <p className="text-xs text-slate-500 mt-1.5 max-w-md mx-auto leading-relaxed">
-            Nhấn <strong className="text-slate-700 font-bold">Generate AI Recommendation</strong> ở trên để nạp kịch bản <strong className="text-[#0ac282] font-bold">Thanh Toán Tự Động Máy POS (5 Màn Hình Tuần Tự)</strong> với đầy đủ các action và bước chuyển trang.
+            Click <strong className="text-slate-700 font-bold">Generate AI Recommendation</strong> above to load the <strong className="text-[#0ac282] font-bold">Automated POS Terminal Flow (5 Sequential Screens)</strong> with complete actions and screen transitions.
           </p>
         </div>
       )}
@@ -1881,7 +1891,7 @@ const AiTestWorkbench = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <span>📱 Theo Từng Màn Hình ({groupStepsByScreen(testScript).length} Màn)</span>
+                <span>By Screen ({groupStepsByScreen(testScript).length} Screens)</span>
               </button>
               <button
                 type="button"
@@ -1892,19 +1902,19 @@ const AiTestWorkbench = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <span>📋 Bảng Gộp Toàn Bộ ({testScript.length} Bước)</span>
+                <span>Full Script Table ({testScript.length} Steps)</span>
               </button>
             </div>
             <div className="text-[11px] text-slate-500 font-medium">
-              💡 Chế độ <strong>Theo Từng Màn Hình</strong> phân tách trực quan từng màn hình và hiển thị rõ thời điểm CNC tự động lùi Z về góc Park để quét trang mới.
+              <strong>By Screen</strong> mode visually breaks down each screen and clearly indicates when CNC automatically parks Z-axis to scan the next screen.
             </div>
           </div>
 
           {/* Steps Display */}
           {testScript.length === 0 ? (
             <div className="text-center py-12 text-slate-500">
-              <div className="font-semibold text-slate-700">Chưa có bước kiểm thử nào</div>
-              <div className="text-xs mt-1 text-slate-400">Bấm "Generate AI Recommendation" ở trên hoặc "+ Add Step" để nạp kịch bản</div>
+              <div className="font-semibold text-slate-700">No test steps yet</div>
+              <div className="text-xs mt-1 text-slate-400">Click "Generate AI Recommendation" above or "+ Add Step" to load script</div>
             </div>
           ) : viewMode === 'screens' ? (
             /* ===================================================================
@@ -1918,20 +1928,20 @@ const AiTestWorkbench = ({
                 {/* Header Ribbon Info */}
                 <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100 flex-wrap gap-2">
                   <div className="flex items-center gap-2.5">
-                    <span className="w-8 h-8 rounded-lg bg-teal-50 text-[#01a9ac] border border-teal-100 flex items-center justify-center font-bold text-sm">
-                      📱
+                    <span className="w-8 h-8 rounded-lg bg-teal-50 text-[#01a9ac] border border-teal-100 flex items-center justify-center font-bold text-xs">
+                      POS
                     </span>
                     <div>
                       <div className="flex items-center gap-2">
                         <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-                          Quy Trình Kiểm Thử Theo Màn Hình
+                          Screen-by-Screen Test Workflow
                         </h4>
                         <span className="text-[10px] font-semibold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-full">
-                          {groupStepsByScreen(testScript).length} Giai Đoạn
+                          {groupStepsByScreen(testScript).length} Stages
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-500 mt-0.5">
-                        Chỉ cần 1 ảnh Màn 1 ban đầu — Bấm vào từng tab bên dưới để chuyển nhanh tới màn hình tương ứng:
+                        Only 1 initial Screen 1 photo required — Click any tab below to quickly jump to the corresponding screen:
                       </p>
                     </div>
                   </div>
@@ -1946,7 +1956,7 @@ const AiTestWorkbench = ({
                           : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
                       }`}
                     >
-                      <span>📋 Xem Tất Cả ({groupStepsByScreen(testScript).length} Màn)</span>
+                      <span>View All ({groupStepsByScreen(testScript).length} Screens)</span>
                     </button>
                   </div>
                 </div>
@@ -1956,14 +1966,14 @@ const AiTestWorkbench = ({
                   {groupStepsByScreen(testScript).map((group, idx) => {
                     const isActive = activeScreenTab === idx;
                     const shortLabels = [
-                      { label: 'Icon Payment', icon: '📱' },
-                      { label: 'Chọn Purchase', icon: '📂' },
-                      { label: 'Số 123 & Pay', icon: '💵' },
-                      { label: 'Tap to Pay', icon: '💳' },
-                      { label: 'PIN 6 số & OK', icon: '🔐' },
-                      { label: 'In Hóa Đơn', icon: '🧾' },
+                      { label: 'Icon Payment', icon: null },
+                      { label: 'Select Purchase', icon: null },
+                      { label: 'Key 123 & Pay', icon: null },
+                      { label: 'Tap to Pay', icon: null },
+                      { label: '6-Digit PIN & OK', icon: null },
+                      { label: 'Print Receipt', icon: null },
                     ];
-                    const info = shortLabels[idx] || { label: group.screenName, icon: '📱' };
+                    const info = shortLabels[idx] || { label: group.screenName, icon: null };
 
                     return (
                       <button
@@ -1988,7 +1998,7 @@ const AiTestWorkbench = ({
                                 : 'bg-slate-200/80 text-slate-600'
                             }`}
                           >
-                            {group.items.length} bước
+                            {group.items.length} steps
                           </span>
                         </div>
                         <div className="mt-1.5">
@@ -2028,11 +2038,11 @@ const AiTestWorkbench = ({
                                   {group.screenName}
                                 </span>
                                 <span className="bg-white/20 text-white text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-white/30 backdrop-blur-xs">
-                                  {group.items.length} thao tác
+                                  {group.items.length} actions
                                 </span>
                               </div>
                               <span className="text-[11px] text-white/80 block mt-0.5 font-medium">
-                                Giai đoạn {realIdx + 1}/{allGroups.length} trong quy trình test POS
+                                Stage {realIdx + 1}/{allGroups.length} in POS test workflow
                               </span>
                             </div>
                           </div>
@@ -2045,27 +2055,27 @@ const AiTestWorkbench = ({
                                     type="button"
                                     onClick={() => setPreviewModalImg(capturedScreens[group.screenName] || capturedImage)}
                                     className="px-2.5 py-1 bg-black/30 hover:bg-black/50 text-emerald-300 text-xs font-bold rounded-lg border border-emerald-400/40 transition-all cursor-pointer flex items-center gap-1 shadow-xs"
-                                    title="Bấm để xem ảnh chụp của thiết bị thực tế từ camera"
+                                    title="Click to view real device snapshot from camera"
                                   >
-                                    <span>📷 Xem Ảnh Thiết Bị</span>
+                                    <span>View Device Photo</span>
                                   </button>
                                 )}
                                 <button
                                   type="button"
                                   onClick={() => handleCaptureScreenSnapshot(group.screenName)}
                                   className="px-2.5 py-1 bg-white/15 hover:bg-white/25 text-white text-xs font-semibold rounded-lg border border-white/20 transition-all cursor-pointer flex items-center gap-1 shadow-xs"
-                                  title="Chụp lại khung hình camera hiện tại và căn chỉnh lại thiết bị"
+                                  title="Re-capture current camera frame and re-align device"
                                 >
-                                  <span>📸 Chụp Lại Thiết Bị</span>
+                                  <span>Re-Capture Device</span>
                                 </button>
                               </>
                             ) : (
                               <span
                                 className="px-2.5 py-1 bg-black/30 text-emerald-300 text-xs font-bold rounded-lg border border-emerald-400/30 flex items-center gap-1.5 shadow-xs cursor-default select-none"
-                                title="AI tự động tính tọa độ từ ảnh Màn 1 ban đầu. CNC tự động thực thi chuỗi phím mà không cần chụp lại."
+                                title="AI automatically calculates coordinates from initial Screen 1 photo. CNC executes key sequence without re-capturing."
                               >
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                                <span>🤖 Tự Động Bấm (Không Cần Chụp)</span>
+                                <span>Auto Actuation (No Capture Needed)</span>
                               </span>
                             )}
                             <button
@@ -2074,7 +2084,7 @@ const AiTestWorkbench = ({
                               disabled={isExecuting}
                               className="px-3 py-1 bg-white/20 hover:bg-white/30 text-white text-xs font-bold rounded-lg border border-white/30 transition-all cursor-pointer flex items-center gap-1 shadow-xs"
                             >
-                              <span>+ Thêm bước vào màn này</span>
+                              <span>+ Add step to this screen</span>
                             </button>
                           </div>
                         </div>
@@ -2095,13 +2105,13 @@ const AiTestWorkbench = ({
                             <tr>
                               <th className="py-2.5 px-3 w-12 text-center">#</th>
                               <th className="py-2.5 px-3 w-32">Action</th>
-                              <th className="py-2.5 px-3">Phím / Nút Cảm Ứng</th>
-                              <th className="py-2.5 px-3 w-36 text-center">Tọa Độ CNC</th>
-                              <th className="py-2.5 px-3 w-32 text-center" title="Lùi Z về góc Park & Chờ POS đổi màn hình để bấm tiếp (Không cần chụp lại)">Chuyển Trang</th>
-                              <th className="py-2.5 px-3 w-32">Giá Trị Nhập</th>
+                              <th className="py-2.5 px-3">Key / Touch Target</th>
+                              <th className="py-2.5 px-3 w-36 text-center">CNC Coordinates</th>
+                              <th className="py-2.5 px-3 w-32 text-center" title="Park Z to corner & wait for POS screen transition (No re-capture needed)">Screen Transition</th>
+                              <th className="py-2.5 px-3 w-32">Input Value</th>
                               <th className="py-2.5 px-3 w-20 text-center">Delay</th>
-                              <th className="py-2.5 px-3 w-24 text-center">Trạng Thái</th>
-                              <th className="py-2.5 px-3 w-36 text-center">Thao Tác</th>
+                              <th className="py-2.5 px-3 w-24 text-center">Status</th>
+                              <th className="py-2.5 px-3 w-36 text-center">Actions</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 bg-white">
@@ -2131,7 +2141,10 @@ const AiTestWorkbench = ({
                                       className="w-full bg-white border border-slate-200 rounded-md py-1.5 px-2 text-xs font-semibold text-slate-700 outline-none focus:border-[#fe5d70]"
                                     >
                                       <option value="CLICK">CLICK (Tap)</option>
-                                      <option value="TRANSITION_SCREEN">🔄 TRANSITION (Đổi trang & Quét)</option>
+                                      <option value="TRANSITION_SCREEN">TRANSITION (Next Screen & Scan)</option>
+                                      <option value="INSERT_CARD">INSERT_CARD (Insert Card - D33)</option>
+                                      <option value="EJECT_CARD">EJECT_CARD (Eject Card - D33)</option>
+                                      <option value="SWIPE_CARD">SWIPE_CARD (Swipe Card - D12)</option>
                                       <option value="TYPE">TYPE (Input)</option>
                                       <option value="WAIT">WAIT (Pause)</option>
                                       <option value="VERIFY">VERIFY (OCR)</option>
@@ -2145,7 +2158,7 @@ const AiTestWorkbench = ({
                                       type="text"
                                       value={step.target}
                                       onChange={(e) => handleUpdateStep(idx, 'target', e.target.value)}
-                                      placeholder="Tên nút / mục tiêu..."
+                                      placeholder="Button name / target..."
                                       disabled={isExecuting}
                                       className="w-full bg-white border border-slate-200 rounded-md py-1.5 px-2.5 text-xs text-slate-800 outline-none focus:border-[#fe5d70] font-medium"
                                     />
@@ -2203,14 +2216,14 @@ const AiTestWorkbench = ({
                                                   )
                                                 );
                                               }
-                                              toast.success(`Đã gán Target #${t.id} (${t.label || 'Target'}) toạ độ (${t.cnc_x}, ${t.cnc_y}) vào bước "${step.target}"!`);
+                                              toast.success(`Assigned Target #${t.id} (${t.label || 'Target'}) coords (${t.cnc_x}, ${t.cnc_y}) to step "${step.target}"!`);
                                             }
                                           }}
                                           disabled={isExecuting}
                                           className="text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-300 rounded px-1.5 py-0.5 outline-none hover:border-emerald-500 cursor-pointer max-w-[135px] truncate"
-                                          title="Chọn mục tiêu đã nhận diện trên camera để gán tọa độ trực tiếp"
+                                          title="Select target detected on camera to directly assign coordinates"
                                         >
-                                          <option value="">🎯 Gán Target Camera...</option>
+                                          <option value="">Assign Camera Target...</option>
                                           {aiTargets.map((t) => (
                                             <option key={t.id} value={t.id}>
                                               #{t.id} {t.label} (X:{t.cnc_x}, Y:{t.cnc_y})
@@ -2221,11 +2234,11 @@ const AiTestWorkbench = ({
                                     )}
                                   </td>
 
-                                  {/* Chuyển trang (Park & Scan Next Screen) */}
+                                  {/* Screen Transition (Park & Scan Next Screen) */}
                                   <td className="py-2.5 px-3 text-center whitespace-nowrap">
                                     <label
                                       className="inline-flex items-center gap-1.5 cursor-pointer select-none text-xs"
-                                      title="Tự động lùi CNC về góc Park và quét màn hình tiếp theo sau bước này"
+                                      title="Automatically park CNC to corner and scan next screen after this step"
                                     >
                                       <input
                                         type="checkbox"
@@ -2241,7 +2254,7 @@ const AiTestWorkbench = ({
                                             : 'text-slate-400'
                                         }`}
                                       >
-                                        {step.park_after || step.action === 'TRANSITION_SCREEN' ? '🔄 Đổi Màn' : 'Cùng Màn'}
+                                        {step.park_after || step.action === 'TRANSITION_SCREEN' ? 'Transition' : 'Same Screen'}
                                       </span>
                                     </label>
                                   </td>
@@ -2252,7 +2265,7 @@ const AiTestWorkbench = ({
                                       type="text"
                                       value={step.value || ''}
                                       onChange={(e) => handleUpdateStep(idx, 'value', e.target.value)}
-                                      placeholder={step.action === 'TYPE' ? 'Giá trị...' : '-'}
+                                      placeholder={step.action === 'TYPE' ? 'Value...' : '-'}
                                       disabled={isExecuting || step.action === 'WAIT'}
                                       className="w-full bg-white border border-slate-200 rounded-md py-1.5 px-2.5 text-xs font-mono text-slate-700 outline-none focus:border-[#fe5d70]"
                                     />
@@ -2296,7 +2309,7 @@ const AiTestWorkbench = ({
                                         onClick={() => handleMoveStep(idx, -1)}
                                         disabled={isExecuting || idx === 0}
                                         className="px-1.5 py-0.5 text-xs border border-slate-200 rounded hover:bg-slate-100 text-slate-600 disabled:opacity-30 cursor-pointer"
-                                        title="Lên"
+                                        title="Move Up"
                                       >
                                         &uarr;
                                       </button>
@@ -2305,7 +2318,7 @@ const AiTestWorkbench = ({
                                         onClick={() => handleMoveStep(idx, 1)}
                                         disabled={isExecuting || idx === testScript.length - 1}
                                         className="px-1.5 py-0.5 text-xs border border-slate-200 rounded hover:bg-slate-100 text-slate-600 disabled:opacity-30 cursor-pointer"
-                                        title="Xuống"
+                                        title="Move Down"
                                       >
                                         &darr;
                                       </button>
@@ -2314,7 +2327,7 @@ const AiTestWorkbench = ({
                                         onClick={() => handleDuplicateStep(idx)}
                                         disabled={isExecuting}
                                         className="px-2 py-0.5 text-[11px] border border-slate-200 rounded hover:bg-slate-100 text-slate-600 disabled:opacity-30 cursor-pointer"
-                                        title="Nhân bản"
+                                        title="Duplicate"
                                       >
                                         Clone
                                       </button>
@@ -2323,7 +2336,7 @@ const AiTestWorkbench = ({
                                         onClick={() => handleDeleteStep(idx)}
                                         disabled={isExecuting}
                                         className="px-2 py-0.5 text-[11px] border border-red-200 rounded hover:bg-red-50 text-red-600 disabled:opacity-30 cursor-pointer"
-                                        title="Xóa"
+                                        title="Delete"
                                       >
                                         Del
                                       </button>
@@ -2341,8 +2354,8 @@ const AiTestWorkbench = ({
                     {hasTransition && activeScreenTab === 'all' && realIdx < allGroups.length - 1 && (
                       <div className="flex flex-col items-center justify-center my-3 select-none">
                         <div className="flex items-center gap-2.5 px-5 py-2.5 bg-gradient-to-r from-teal-50 via-sky-50 to-teal-50 border border-teal-200 rounded-full text-teal-900 text-xs font-bold shadow-xs">
-                          <span className="text-teal-600 text-base">⚡</span>
-                          <span>[TỰ ĐỘNG CHUYỂN TRANG] CNC nhấc bút lùi Z về Góc 1 (Vị trí Park) ➔ Chờ POS đổi màn (1.2s - 1.6s) ➔ Tự động bấm tiếp Màn {realIdx + 2} (Không cần chụp lại)</span>
+                          
+                          <span>[AUTOMATED SCREEN TRANSITION] CNC lifts stylus and parks Z at Corner 1 (Park position) &rarr; Wait for POS transition (1.2s - 1.6s) &rarr; Automatically tap Screen {realIdx + 2} (No re-capture needed)</span>
                           <span className="text-teal-600 font-extrabold text-sm">&darr;</span>
                         </div>
                       </div>
@@ -2360,7 +2373,7 @@ const AiTestWorkbench = ({
                     onClick={() => setActiveScreenTab((prev) => Math.max(0, prev - 1))}
                     className="px-3.5 py-1.5 font-bold rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-30 cursor-pointer flex items-center gap-1.5 text-slate-700 transition-colors"
                   >
-                    <span>&larr;</span> <span>Màn trước ({activeScreenTab > 0 ? groupStepsByScreen(testScript)[activeScreenTab - 1]?.screenName : ''})</span>
+                    <span>&larr;</span> <span>Previous Screen ({activeScreenTab > 0 ? groupStepsByScreen(testScript)[activeScreenTab - 1]?.screenName : ''})</span>
                   </button>
 
                   <button
@@ -2368,7 +2381,7 @@ const AiTestWorkbench = ({
                     onClick={() => setActiveScreenTab('all')}
                     className="text-xs text-teal-700 hover:text-teal-800 font-bold hover:underline cursor-pointer"
                   >
-                    📋 Hiển thị tất cả {groupStepsByScreen(testScript).length} màn hình
+                    Display all {groupStepsByScreen(testScript).length} screens
                   </button>
 
                   <button
@@ -2377,7 +2390,7 @@ const AiTestWorkbench = ({
                     onClick={() => setActiveScreenTab((prev) => Math.min(groupStepsByScreen(testScript).length - 1, prev + 1))}
                     className="px-3.5 py-1.5 font-bold rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-30 cursor-pointer flex items-center gap-1.5 text-slate-700 transition-colors"
                   >
-                    <span>Màn tiếp theo ({activeScreenTab < groupStepsByScreen(testScript).length - 1 ? groupStepsByScreen(testScript)[activeScreenTab + 1]?.screenName : ''})</span> <span>&rarr;</span>
+                    <span>Next Screen ({activeScreenTab < groupStepsByScreen(testScript).length - 1 ? groupStepsByScreen(testScript)[activeScreenTab + 1]?.screenName : ''})</span> <span>&rarr;</span>
                   </button>
                 </div>
               )}
@@ -2391,11 +2404,11 @@ const AiTestWorkbench = ({
                 <thead className="bg-[#404E67] text-white text-[11px] font-bold uppercase tracking-wider">
                   <tr>
                     <th className="py-3 px-3 w-12 text-center">#</th>
-                    <th className="py-3 px-3 w-32">Màn Hình</th>
+                    <th className="py-3 px-3 w-32">Screen</th>
                     <th className="py-3 px-3 w-32">Action</th>
                     <th className="py-3 px-3">UI Target Element</th>
                     <th className="py-3 px-3 w-40 text-center">CNC Coords (X, Y)</th>
-                    <th className="py-3 px-3 w-36 text-center" title="Lùi Z về góc Park & Chờ POS đổi màn hình để bấm tiếp (Không cần chụp lại)">Chuyển Trang</th>
+                    <th className="py-3 px-3 w-36 text-center" title="Park Z to corner & wait for POS screen transition (No re-capture needed)">Screen Transition</th>
                     <th className="py-3 px-3 w-36">Input Value</th>
                     <th className="py-3 px-3 w-24 text-center">Delay (ms)</th>
                     <th className="py-3 px-3 w-28 text-center">Status</th>
@@ -2424,7 +2437,7 @@ const AiTestWorkbench = ({
                             type="text"
                             value={step.screen || ''}
                             onChange={(e) => handleUpdateStep(idx, 'screen', e.target.value)}
-                            placeholder="Màn hình..."
+                            placeholder="Screen name..."
                             disabled={isExecuting}
                             className="w-28 bg-slate-50 border border-slate-200 rounded px-2 py-1 text-[11px] font-bold text-indigo-700 outline-none focus:border-indigo-500"
                           />
@@ -2439,7 +2452,7 @@ const AiTestWorkbench = ({
                             className="w-full bg-white border border-slate-200 rounded-md py-1.5 px-2 text-xs font-semibold text-slate-700 outline-none focus:border-[#fe5d70]"
                           >
                             <option value="CLICK">CLICK (Tap)</option>
-                            <option value="TRANSITION_SCREEN">🔄 TRANSITION (Đổi trang & Quét)</option>
+                            <option value="TRANSITION_SCREEN">TRANSITION (Next Screen & Scan)</option>
                             <option value="TYPE">TYPE (Input)</option>
                             <option value="WAIT">WAIT (Pause)</option>
                             <option value="VERIFY">VERIFY (OCR)</option>
@@ -2487,11 +2500,11 @@ const AiTestWorkbench = ({
                           )}
                         </td>
 
-                        {/* Chuyển trang (Park & Scan Next Screen) */}
+                        {/* Screen Transition (Park & Scan Next Screen) */}
                         <td className="py-2.5 px-3 text-center whitespace-nowrap">
                           <label
                             className="inline-flex items-center gap-1.5 cursor-pointer select-none text-xs"
-                            title="Tự động lùi CNC về góc Park và quét màn hình tiếp theo sau bước này"
+                            title="Automatically park CNC to corner and scan next screen after this step"
                           >
                             <input
                               type="checkbox"
@@ -2507,7 +2520,7 @@ const AiTestWorkbench = ({
                                   : 'text-slate-400'
                               }`}
                             >
-                              {step.park_after || step.action === 'TRANSITION_SCREEN' ? '🔄 Màn Mới' : 'Cùng Màn'}
+                              {step.park_after || step.action === 'TRANSITION_SCREEN' ? 'Next Screen' : 'Same Screen'}
                             </span>
                           </label>
                         </td>

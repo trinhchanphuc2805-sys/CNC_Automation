@@ -155,9 +155,9 @@ class AiDetectRequest(BaseModel):
     invert_x: bool = False
     invert_y: bool = False
     swap_xy: bool = False
-    key1_x: Optional[float] = 50.0
+    key1_x: Optional[float] = -50.0
     key1_y: Optional[float] = -170.0
-    spacing_x: Optional[float] = 100.0
+    spacing_x: Optional[float] = -100.0
     spacing_y: Optional[float] = -100.0
 
 
@@ -238,6 +238,53 @@ class SetupLockRequest(BaseModel):
     targets: list[dict] = []
     snapshot: Optional[str] = None
     is_locked: bool = True
+
+
+class CardConnectRequest(BaseModel):
+    port: str
+    baudrate: int = 115200
+
+
+class CardActionRequest(BaseModel):
+    seconds: Optional[float] = 2.0
+    direction: Optional[str] = None
+
+
+class CardServoRequest(BaseModel):
+    direction: str  # 'l' / 'r' for D12, 'a' / 'b' for D33
+    seconds: float = 2.0
+
+
+class CardInsertEjectRequest(BaseModel):
+    insert_seconds: Optional[float] = 2.0
+    hold_seconds: Optional[float] = 2.0
+    eject_seconds: Optional[float] = 2.0
+
+
+class CardSwipeReturnRequest(BaseModel):
+    swipe_seconds: Optional[float] = 2.0
+    return_seconds: Optional[float] = 2.0
+
+
+class CardConfigRequest(BaseModel):
+    insert_servo: Optional[str] = "D33"
+    swipe_servo: Optional[str] = "D12"
+    default_insert_seconds: Optional[float] = 2.0
+    default_eject_seconds: Optional[float] = 2.0
+    default_swipe_seconds: Optional[float] = 2.0
+
+
+class CardRawCommandRequest(BaseModel):
+    command: str
+
+
+class CardNfcAngleRequest(BaseModel):
+    angle: int = 90
+
+
+class CardNfcTapRequest(BaseModel):
+    angle: int = 90
+
 
 
 

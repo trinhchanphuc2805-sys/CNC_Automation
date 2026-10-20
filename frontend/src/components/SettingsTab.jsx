@@ -1,5 +1,6 @@
 import React from 'react';
 import ComConfig from './ComConfig';
+import CardControl from './CardControl';
 import ManualControl from './ManualControl';
 import SettingsPanel from './SettingsPanel';
 import SequenceControl from './SequenceControl';
@@ -23,7 +24,10 @@ const SettingsTab = ({ isConnected, setIsConnected }) => {
         <ComConfig isConnected={isConnected} setIsConnected={setIsConnected} />
       </div>
 
-      {/* 2. Manual Jog (X, Y, Z, A) */}
+      {/* 2. ESP32 2x Servo 360° Card Controller (Insert & Swipe Card) */}
+      <CardControl />
+
+      {/* 3. Manual Jog (X, Y, Z, A) */}
       <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs relative overflow-hidden">
         <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-[#0ac282] to-[#0df3a3]" />
         <div className="pb-4 mb-4 border-b border-slate-100">

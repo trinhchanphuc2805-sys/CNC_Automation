@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
-from openai import OpenAI
 from pydantic import BaseModel, Field
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
@@ -15,15 +14,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai", tags=["AI Test Cases"])
 
-_client: Optional[OpenAI] = None
+_client = None
 
 
-def get_openai_client() -> Optional[OpenAI]:
+def get_openai_client():
     global _client
     if _client is None:
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if api_key:
-            _client = OpenAI(api_key=api_key)
+        try:
+            from openai import OpenAI
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if api_key:
+                _client = OpenAI(api_key=api_key)
+        except Exception as e:
+            logger.warning("OpenAI client init failed: %s", e)
     return _client
 
 
@@ -103,6 +106,77 @@ def _rule_based_fallback(prompt: str) -> List[Dict[str, Any]]:
                 "status": "idle",
             },
         ]
+    elif "cắm thẻ" in prompt_lower or "insert card" in prompt_lower or "đút thẻ" in prompt_lower or "chèn thẻ" in prompt_lower:
+        pin_match = re.search(r"(?:pin|mã pin|pass)\s*[:=]?\s*(\d{4,6})", prompt, re.IGNORECASE)
+        pin_val = pin_match.group(1) if pin_match else "1234"
+        steps = [
+            {
+                "id": 1,
+                "action": "INSERT_CARD",
+                "target": "ATM / POS Card Slot",
+                "value": "2",
+                "delay_ms": 1000,
+                "description": "Cắm thẻ ngân hàng vào khe đọc thẻ bằng Servo (D33)",
+                "status": "idle",
+            },
+            {
+                "id": 2,
+                "action": "TYPE",
+                "target": "Keypad PIN",
+                "value": pin_val,
+                "delay_ms": 600,
+                "description": f"Nhập mã PIN {pin_val} trên bàn phím",
+                "status": "idle",
+            },
+            {
+                "id": 3,
+                "action": "CLICK",
+                "target": "Enter / OK Button",
+                "value": "",
+                "delay_ms": 1200,
+                "description": "Nhấn phím xác nhận giao dịch",
+                "status": "idle",
+            },
+            {
+                "id": 4,
+                "action": "EJECT_CARD",
+                "target": "ATM / POS Card Slot",
+                "value": "2",
+                "delay_ms": 800,
+                "description": "Rút thẻ ra khỏi khe đọc bằng Servo (D33)",
+                "status": "idle",
+            },
+        ]
+    elif "quẹt thẻ" in prompt_lower or "swipe card" in prompt_lower or "swip card" in prompt_lower or "thẻ từ" in prompt_lower:
+        steps = [
+            {
+                "id": 1,
+                "action": "SWIPE_CARD",
+                "target": "Magnetic Card Reader Slot",
+                "value": "2",
+                "delay_ms": 1000,
+                "description": "Quẹt thẻ từ qua khe đọc bằng Servo (D12)",
+                "status": "idle",
+            },
+            {
+                "id": 2,
+                "action": "CLICK",
+                "target": "Confirm / OK Button",
+                "value": "",
+                "delay_ms": 1000,
+                "description": "Nhấn nút xác nhận giao dịch thẻ từ",
+                "status": "idle",
+            },
+            {
+                "id": 3,
+                "action": "VERIFY",
+                "target": "Transaction Successful Screen",
+                "value": "",
+                "delay_ms": 1000,
+                "description": "Kiểm tra màn hình thông báo thanh toán thành công",
+                "status": "idle",
+            },
+        ]
     elif "thanh toán" in prompt_lower or "pos" in prompt_lower or "pay" in prompt_lower or "amount" in prompt_lower:
         steps = [
             {
@@ -150,22 +224,29 @@ def generate_test_cases(req: GenerateTestCaseRequest):
     if client:
         try:
             system_msg = (
-                "You are an industrial QA Automation Lead for hardware test rigs (CNC robot stylus touching smartphones, POS, and test screens).\n"
+                "You are an industrial QA Automation Lead for hardware test rigs (CNC robot stylus touching smartphones, POS, ATM keypads, and dual 360-degree servo card feeder).\n"
                 "Convert the user's natural language test requirement into a sequential, actionable test script.\n"
-                "Available Actions: 'CLICK' (touch target element), 'TYPE' (input text into target), 'WAIT' (pause execution), 'VERIFY' (verify UI state).\n"
-                "Target names must be clear, concise English UI element names (e.g. 'Email / Phone Field', 'Password Field', 'Login Button', 'Key 1', 'Cancel Button').\n"
+                "Available Actions:\n"
+                "- 'CLICK': touch target element on screen/keypad\n"
+                "- 'TYPE': input text into target field\n"
+                "- 'WAIT': pause execution for specified delay\n"
+                "- 'VERIFY': verify UI state or screen message\n"
+                "- 'INSERT_CARD': insert ATM/chip card into card slot using Servo 360 (D33)\n"
+                "- 'EJECT_CARD': eject/retract card out of card slot using Servo 360 (D33)\n"
+                "- 'SWIPE_CARD': swipe magnetic card through swipe slot using Servo 360 (D12)\n"
+                "Target names must be clear, concise English UI element names (e.g. 'Email / Phone Field', 'Password Field', 'Card Slot', 'Key 1', 'Cancel Button').\n"
                 "Return JSON ONLY matching this exact structure:\n"
                 "{\n"
-                '  "test_name": "Test Scenario Name (e.g. Facebook Login Flow)",\n'
+                '  "test_name": "Test Scenario Name (e.g. POS Card Payment Flow)",\n'
                 '  "description": "Brief summary of the test objective",\n'
                 '  "steps": [\n'
                 '    {\n'
                 '      "id": 1,\n'
-                '      "action": "CLICK",\n'
-                '      "target": "Target element name",\n'
-                '      "value": "optional value",\n'
-                '      "delay_ms": 600,\n'
-                '      "description": "Action description",\n'
+                '      "action": "INSERT_CARD",\n'
+                '      "target": "POS Card Slot",\n'
+                '      "value": "2",\n'
+                '      "delay_ms": 1000,\n'
+                '      "description": "Insert smart card into POS slot",\n'
                 '      "status": "idle"\n'
                 '    }\n'
                 '  ]\n'

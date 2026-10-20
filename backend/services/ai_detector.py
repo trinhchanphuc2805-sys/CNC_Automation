@@ -245,6 +245,26 @@ class AIDetectorService:
                         "label": elem_model.names.get(int(box.cls[0]), "Button"),
                     })
 
+                # 1b. Locate device bounds for spatial zone classification (Header vs Content vs Navigation Bar)
+                try:
+                    p_res = get_yolo_model()(frame, conf=0.25, verbose=False)[0]
+                    if len(p_res.boxes) > 0:
+                        pbx = p_res.boxes[0].xyxy[0].tolist()
+                        px1, py1, px2, py2 = pbx
+                        ph = max(50.0, py2 - py1)
+                        pw = max(50.0, px2 - px1)
+                    else:
+                        px1, py1, px2, py2 = 0, 0, w, h
+                        ph, pw = float(h), float(w)
+                except Exception:
+                    px1, py1, px2, py2 = 0, 0, w, h
+                    ph, pw = float(h), float(w)
+
+                for b in yolo_raw_boxes:
+                    rel_y = (b["center_y"] - py1) / ph
+                    b["is_header"] = (rel_y < 0.22)
+                    b["is_nav_bar"] = (rel_y > 0.88 and b["height"] < 35)
+
                 # 2. Run OpenAI GPT-4o to read semantic button names on screen
                 has_work_area = work_area is not None and len(work_area) == 4
                 inv_M = None
@@ -288,11 +308,17 @@ class AIDetectorService:
                             cx_w, cy_w = (xw1 + xw2) / 2.0, (yw1 + yw2) / 2.0
                             pt_w = np.array([[[cx_w, cy_w]]], dtype=np.float32)
                             pt_orig = cv2.perspectiveTransform(pt_w, inv_M)[0, 0]
+                            box_w = np.array([[[xw1, yw1]], [[xw2, yw1]], [[xw2, yw2]], [[xw1, yw2]]], dtype=np.float32)
+                            box_orig = cv2.perspectiveTransform(box_w, inv_M)[:, 0]
+                            w_orig = float(np.linalg.norm(box_orig[1] - box_orig[0]))
+                            h_orig = float(np.linalg.norm(box_orig[3] - box_orig[0]))
                             gpt_targets.append({
                                 "label": gt["label"],
                                 "confidence": gt.get("confidence", 0.95),
                                 "center_x": float(pt_orig[0]),
                                 "center_y": float(pt_orig[1]),
+                                "width": max(10.0, w_orig),
+                                "height": max(10.0, h_orig),
                             })
                         else:
                             gpt_targets.append({
@@ -300,32 +326,73 @@ class AIDetectorService:
                                 "confidence": gt.get("confidence", 0.95),
                                 "center_x": float(gt["center_x"]),
                                 "center_y": float(gt["center_y"]),
+                                "width": float(gt.get("width", xw2 - xw1)),
+                                "height": float(gt.get("height", yw2 - yw1)),
                             })
                 except Exception as gpt_err:
                     logger.warning("Hybrid GPT-4o pass warning: %s", gpt_err)
 
                 # 3. Spatial Bipartite Matching: Map each YOLO physical box to the nearest GPT-4o semantic target
+                # Uses size-aware distance: a large wide button (Pay/Cancel) will not accidentally bind to a tiny icon.
                 matched_yolo = set()
                 matched_gpt = set()
                 pairs = []
                 for yi, y_box in enumerate(yolo_raw_boxes):
                     ycx, ycy = y_box["center_x"], y_box["center_y"]
+                    yw, yh = y_box["width"], y_box["height"]
                     for gi, g_target in enumerate(gpt_targets):
-                        dist = float(np.hypot(ycx - g_target["center_x"], ycy - g_target["center_y"]))
-                        pairs.append((dist, yi, gi))
+                        glbl = str(g_target.get("label", "")).lower()
+
+                        # Rule 1: Numeric keys (0-9, Key 1-9) cannot match header elements
+                        is_num_key = any(k in glbl for k in ["key", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "clear", "backspace"]) and not any(w in glbl for w in ["pay", "cancel", "refund", "purchase"])
+                        if is_num_key and y_box.get("is_header"):
+                            continue
+
+                        # Rule 2: App buttons (Payments, Home, Pay, Cancel, Refund) cannot match bottom nav bar
+                        is_app_btn = any(w in glbl for w in ["pay", "cancel", "refund", "purchase", "home", "continue", "confirm", "next", "icon_app"])
+                        if is_app_btn and y_box.get("is_nav_bar"):
+                            continue
+
+                        raw_dist = float(np.hypot(ycx - g_target["center_x"], ycy - g_target["center_y"]))
+                        gw = g_target.get("width", 0)
+                        gh = g_target.get("height", 0)
+
+                        # Size compatibility penalty: prevent a wide rectangular button from matching a tiny square icon
+                        size_penalty = 1.0
+                        if gw > 0 and yw > 0:
+                            w_ratio = max(gw, yw) / max(1.0, min(gw, yw))
+                            if w_ratio > 1.8:
+                                size_penalty *= (w_ratio ** 1.6)
+
+                        effective_dist = raw_dist * size_penalty
+                        pairs.append((effective_dist, raw_dist, yi, gi))
 
                 pairs.sort(key=lambda p: p[0])
 
-                for dist, yi, gi in pairs:
+                for eff_dist, raw_dist, yi, gi in pairs:
                     if yi in matched_yolo or gi in matched_gpt:
                         continue
                     y_box = yolo_raw_boxes[yi]
-                    max_allowed = max(120.0, 1.8 * max(y_box["width"], y_box["height"]))
-                    if dist <= max_allowed:
+                    max_allowed = max(130.0, 2.0 * max(y_box["width"], y_box["height"]))
+                    if raw_dist <= max_allowed:
                         matched_yolo.add(yi)
                         matched_gpt.add(gi)
                         y_box["label"] = gpt_targets[gi]["label"]
                         y_box["confidence"] = max(y_box["confidence"], gpt_targets[gi]["confidence"])
+
+                # Assign intuitive fallback labels for unmatched system elements
+                for yi, y_box in enumerate(yolo_raw_boxes):
+                    if yi not in matched_yolo:
+                        if y_box.get("is_header"):
+                            y_box["label"] = "Back Button"
+                        elif y_box.get("is_nav_bar"):
+                            rel_x = (y_box["center_x"] - px1) / pw
+                            if rel_x < 0.35:
+                                y_box["label"] = "Nav Back"
+                            elif rel_x < 0.65:
+                                y_box["label"] = "Nav Home"
+                            else:
+                                y_box["label"] = "Nav Recents"
 
                 # If YOLO detected boxes, sort them neatly top-down left-right
                 if yolo_raw_boxes:
@@ -597,6 +664,32 @@ class AIDetectorService:
         union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
         return inter / union if union > 0 else 0.0
 
+    @staticmethod
+    def _filter_device_boxes(boxes: List[Tuple[int, int, int, int]], min_area_ratio: float = 0.25,
+                             max_overlap: float = 0.5) -> List[Tuple[int, int, int, int]]:
+        """Remove spurious device detections: boxes much smaller than the biggest device (servo, card, cable...)
+        and boxes that mostly overlap an already-kept, larger box (duplicate detections of the same POS)."""
+        if len(boxes) <= 1:
+            return list(boxes)
+        area = lambda b: max(0, b[2] - b[0]) * max(0, b[3] - b[1])
+        ordered = sorted(boxes, key=area, reverse=True)
+        biggest = area(ordered[0]) or 1
+        kept: List[Tuple[int, int, int, int]] = []
+        for b in ordered:
+            a = area(b)
+            if a < min_area_ratio * biggest:
+                continue
+            overlapped = False
+            for k in kept:
+                ix = max(0, min(b[2], k[2]) - max(b[0], k[0]))
+                iy = max(0, min(b[3], k[3]) - max(b[1], k[1]))
+                if a > 0 and (ix * iy) / a > max_overlap:
+                    overlapped = True
+                    break
+            if not overlapped:
+                kept.append(b)
+        return kept
+
     def _detect_opencv_shapes(self, image: np.ndarray) -> List[Dict[str, Any]]:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -770,11 +863,15 @@ class AIDetectorService:
             "You are a precision UI touch-localization assistant for a robotic CNC stylus tester. The image is cropped to "
             "ONE phone/POS device and has a thin YELLOW GRID with labels 0.1-0.9 (x labels on top, y labels on the left) "
             "- use it to read accurate normalized coordinates, then ignore the grid itself. "
-            "Detect EVERY individual touchable element INSIDE the lit screen, including: each app icon, dock icon, "
-            "buttons, keypad keys (e.g. 'Key 1', 'Key 2', ... 'Key 9', 'Key 0', 'C', 'Cancel', 'Pay'), input fields, search bars. "
-            "CRITICAL ACCURACY REQUIREMENT: center_x_norm and center_y_norm MUST strictly coincide with the exact visible physical center of the button/key as aligned with the yellow grid numbers (0.1 - 0.9). "
-            "Do NOT place any phantom keys in empty whitespace. Each box tightly encloses ONE element. "
-            "Label each element with the EXACT visible text on it (e.g. 'Purchase', 'Key 1', 'Cancel', 'Pay'). " + schema
+            "Detect EVERY individual touchable element INSIDE the lit screen, specifically observing: "
+            "1. Numeric keypad layout: Row 1 (1, 2, 3), Row 2 (4, 5, 6), Row 3 (7, 8, 9), Row 4 (Clear 'C', '0', Backspace '<'). "
+            "2. Action buttons BELOW the keypad: Wide rectangular buttons such as 'Cancel' on the left and 'Pay' on the right. "
+            "3. Bottom navigation bar (if visible at the bottom chin): 'Nav Back' (<), 'Nav Home' (O), 'Nav Recents' (|||). "
+            "4. App icons, back header arrow, amount fields, and text labels. "
+            "CRITICAL ACCURACY REQUIREMENT: Do NOT place Cancel/Pay inside the numeric 0 row. Cancel and Pay are wide action buttons BELOW the numeric keys. "
+            "center_x_norm and center_y_norm MUST strictly coincide with the exact visible physical center of the button/key as aligned with the yellow grid numbers (0.1 - 0.9). "
+            "Each box tightly encloses ONE element. "
+            "Label each element with the EXACT visible text on it (e.g. 'Pay', 'Cancel', '1', '2', 'C', 'Purchase'). " + schema
         )
         data = self._call_vision_json(client, model, system, user_target, grid)
         res = self._parse_targets(data, cw, ch)
@@ -821,6 +918,7 @@ class AIDetectorService:
                 device_boxes.append((int(bx1 + ix), int(by1 + iy), int(bx2 - ix), int(by2 - iy)))
         except Exception as e:
             logger.warning("YOLO device locate failed: %s", e)
+        device_boxes = self._filter_device_boxes(device_boxes)
         device_boxes.sort(key=lambda b: (b[0], b[1]))  # left-to-right
 
         if not device_boxes:
@@ -919,12 +1017,9 @@ class AIDetectorService:
                     break
             if not dup:
                 kept.append(r)
-        try:
-            refined = self._refine_in_crop(client, model, image, box, kept, user_target, schema)
-            if refined:
-                kept = refined
-        except Exception as e:
-            logger.warning("Refine pass failed, keeping first-pass result: %s", e)
+
+        # Note: _refine_in_crop drew red box index numbers which confused GPT into labeling buttons as '1', '2', '3' etc.
+        # Keeping first-pass results preserves exact text labels (Refund, Cancel, Payments, etc.) with 2x faster response.
         kept.sort(key=lambda r: (round(r["center_y"] / max(1.0, bh * 0.06)), r["center_x"]))
         return kept
 

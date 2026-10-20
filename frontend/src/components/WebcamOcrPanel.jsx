@@ -4,14 +4,88 @@ import toast from 'react-hot-toast';
 
 const API_BASE = 'http://localhost:8000/api';
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---- Lightweight luma sampling helpers (used by the execution displacement watchdog) ----
+const WATCH_SAMPLE_DIM = 128;
+const WATCH_GRID_SIZE = 8;
+const WATCH_BLOCK_SIZE = WATCH_SAMPLE_DIM / WATCH_GRID_SIZE;
+const WATCH_BLOCK_CHANGE_THRESHOLD = 9.0;
+
+function getWorkAreaCropRect(video, workArea) {
+  const vw = video.videoWidth || 640;
+  const vh = video.videoHeight || 480;
+  if (Array.isArray(workArea) && workArea.length >= 4) {
+    const xs = workArea.map((p) => (Array.isArray(p) ? p[0] : (p?.x ?? 0)));
+    const ys = workArea.map((p) => (Array.isArray(p) ? p[1] : (p?.y ?? 0)));
+    const minX = Math.max(0, Math.min(...xs));
+    const minY = Math.max(0, Math.min(...ys));
+    const maxX = Math.min(vw, Math.max(...xs));
+    const maxY = Math.min(vh, Math.max(...ys));
+    if (maxX - minX >= 40 && maxY - minY >= 40) {
+      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
+  }
+  return { x: 0, y: 0, w: vw, h: vh };
+}
+
+function sampleWorkAreaLuma(video, workArea, ctx) {
+  if (!video || video.readyState < 2 || !video.videoWidth || !ctx) return null;
+  const crop = getWorkAreaCropRect(video, workArea);
+  ctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, WATCH_SAMPLE_DIM, WATCH_SAMPLE_DIM);
+  const data = ctx.getImageData(0, 0, WATCH_SAMPLE_DIM, WATCH_SAMPLE_DIM).data;
+  const luma = new Uint8Array(WATCH_SAMPLE_DIM * WATCH_SAMPLE_DIM);
+  for (let i = 0, j = 0; i < data.length; i += 4, j += 1) {
+    luma[j] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+  }
+  return luma;
+}
+
+function lumaMeanDiff(a, b) {
+  if (!a || !b || a.length !== b.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < a.length; i += 1) sum += Math.abs(a[i] - b[i]);
+  return sum / a.length;
+}
+
+// 64-block spatial diff: separates global changes (POS moved / new page) from local ones (stylus on a key)
+function lumaBlockDiff(curr, base) {
+  if (!curr || !base || curr.length !== base.length) {
+    return { avgDiff: 0, changedBlockRatio: 0, changedBlocks: 0 };
+  }
+  let totalDiff = 0;
+  let changedBlocks = 0;
+  for (let by = 0; by < WATCH_GRID_SIZE; by += 1) {
+    for (let bx = 0; bx < WATCH_GRID_SIZE; bx += 1) {
+      let blockSum = 0;
+      for (let y = 0; y < WATCH_BLOCK_SIZE; y += 1) {
+        const rowStart = (by * WATCH_BLOCK_SIZE + y) * WATCH_SAMPLE_DIM;
+        for (let x = 0; x < WATCH_BLOCK_SIZE; x += 1) {
+          const idx = rowStart + (bx * WATCH_BLOCK_SIZE + x);
+          blockSum += Math.abs(curr[idx] - base[idx]);
+        }
+      }
+      totalDiff += blockSum;
+      if (blockSum / (WATCH_BLOCK_SIZE * WATCH_BLOCK_SIZE) >= WATCH_BLOCK_CHANGE_THRESHOLD) changedBlocks += 1;
+    }
+  }
+  return {
+    avgDiff: totalDiff / (WATCH_SAMPLE_DIM * WATCH_SAMPLE_DIM),
+    changedBlockRatio: changedBlocks / (WATCH_GRID_SIZE * WATCH_GRID_SIZE),
+    changedBlocks,
+  };
+}
+
 export function formatLabelToEnglish(label) {
   if (!label) return 'Target Element';
-  const l = String(label).trim();
+  // Strip the backend multi-device prefix ("D1 Purchase", "D2 Refund"): its digit must never be read as a key number
+  const l = String(label).trim().replace(/^d\d+\s+/i, '');
   const lower = l.toLowerCase();
 
-  // Normalize numbers 0-9: e.g. "nut 1", "nút 1", "phím 1", "key 1", "button 1", "1"
-  const m = lower.match(/(?:nut|nút|phim|phím|key|button|số|so)?\s*([0-9])\b/);
-  if (m && !lower.includes('nhap') && !lower.includes('nhập') && !lower.includes('amount') && !lower.includes('tien') && !lower.includes('tiền')) {
+  // Normalize numbers 0-9 ONLY when the whole label is a key: "nut 1", "nút 1", "phím 1", "key 1", "button 1", "btn_1", "1".
+  // (Previously any label containing a lone digit, e.g. "D1 Purchase" or "Pay 100", was turned into "Key N".)
+  const m = lower.match(/^(?:nut|nút|phim|phím|key|button|btn|số|so)?\s*[-_#]?\s*([0-9])$/);
+  if (m) {
     return `Key ${m[1]}`;
   }
 
@@ -191,9 +265,9 @@ const WebcamOcrPanel = ({
   const [savedWorkArea, setSavedWorkArea] = useState(null);
 
   // CNC Machine physical bounds & offset
-  const [originX, setOriginX] = useState(200);
+  const [originX, setOriginX] = useState(-200);
   const [originY, setOriginY] = useState(0);
-  const [cncWidth, setCncWidth] = useState(380);
+  const [cncWidth, setCncWidth] = useState(-380);
   const [cncHeight, setCncHeight] = useState(-460);
   const [cameraOffsetX, setCameraOffsetX] = useState(0);
   const [cameraOffsetY, setCameraOffsetY] = useState(0);
@@ -201,15 +275,15 @@ const WebcamOcrPanel = ({
   const [invertX, setInvertX] = useState(false);
   const [invertY, setInvertY] = useState(true);
   const [swapXY, setSwapXY] = useState(false);
-  const [key1X, setKey1X] = useState(50);
+  const [key1X, setKey1X] = useState(-50);
   const [key1Y, setKey1Y] = useState(-170);
-  const [spacingX, setSpacingX] = useState(100);
+  const [spacingX, setSpacingX] = useState(-100);
   const [spacingY, setSpacingY] = useState(-100);
   const [jogSteps, setJogSteps] = useState(100);
   const [currentCncPos, setCurrentCncPos] = useState({ x: 0, y: 0, a: 0 });
 
   // AI Target Detection states
-  const [aiPrompt, setAiPrompt] = useState('All buttons, app icons, and numeric keypad keys on POS machine screen');
+  const [aiPrompt, setAiPrompt] = useState('All keypad keys 0-9, Clear C, Backspace, Cancel button, Pay button, and app icons on POS screen');
   const [aiModel, setAiModel] = useState('hybrid');
   const [openaiApiKey, setOpenaiApiKey] = useState(() => localStorage.getItem('cnc_openai_api_key') || '');
   const [openaiStatus, setOpenaiStatus] = useState({ configured: false, masked_key: '' });
@@ -356,7 +430,7 @@ const WebcamOcrPanel = ({
   const handleWarmupModel = async (showToast = true) => {
     setIsWarmingUp(true);
     let tId = null;
-    if (showToast) tId = toast.loading('Đang nạp trước model YOLO & OpenAI GPT-4o...');
+    if (showToast) tId = toast.loading('Pre-loading YOLO model & OpenAI GPT-4o...');
     try {
       const res = await axios.post(`${API_BASE}/webcam/model-warmup`);
       if (res.data) {
@@ -368,11 +442,11 @@ const WebcamOcrPanel = ({
         }));
         if (showToast) {
           const gptPart = res.data.openai ? ' & OpenAI GPT-4o' : '';
-          toast.success(`Đã nạp sẵn model YOLO (best.pt)${gptPart}! Quét detect sẽ phản hồi tức thì.`, { id: tId });
+          toast.success(`YOLO model (best.pt)${gptPart} pre-loaded! Detection will respond instantly.`, { id: tId });
         }
       }
     } catch (err) {
-      if (showToast) toast.error('Không thể nạp model: ' + (err.message || 'Lỗi server'), { id: tId });
+      if (showToast) toast.error('Unable to load model: ' + (err.message || 'Server error'), { id: tId });
     } finally {
       setIsWarmingUp(false);
       fetchModelStatus();
@@ -416,16 +490,16 @@ const WebcamOcrPanel = ({
       });
     }
 
-    toast.success(`Đã gán Target #${target.id} (${assignedLabel}) vào Bước #${sIdx + 1} (Toạ độ CNC: X=${target.cnc_x}, Y=${target.cnc_y})`);
+    toast.success(`Assigned Target #${target.id} (${assignedLabel}) to Step #${sIdx + 1} (CNC Coords: X=${target.cnc_x}, Y=${target.cnc_y})`);
   };
 
   const handleAutoMapToScript = () => {
     if (!activeTestScript || !Array.isArray(activeTestScript) || activeTestScript.length === 0) {
-      toast.error('Không tìm thấy kịch bản test để map!');
+      toast.error('No test script found to map!');
       return;
     }
     if (!aiTargets || aiTargets.length === 0) {
-      toast.error('Chưa có targets nào được nhận diện trên camera!');
+      toast.error('No targets detected on camera yet!');
       return;
     }
 
@@ -437,7 +511,7 @@ const WebcamOcrPanel = ({
     const updatedTargets = [...aiTargets];
     const updatedScript = setTestScript ? [...activeTestScript] : null;
 
-    // Sắp xếp các target theo thứ tự đọc: trên xuống dưới, trái qua phải
+    // Sort targets by reading order: top to bottom, left to right
     const sortedTargets = [...updatedTargets].sort((a, b) => {
       const yDiff = (a.pixel_y || 0) - (b.pixel_y || 0);
       if (Math.abs(yDiff) > 30) return yDiff;
@@ -475,7 +549,7 @@ const WebcamOcrPanel = ({
     if (updatedScript && setTestScript) {
       setTestScript(updatedScript);
     }
-    toast.success(`Đã tự động liên kết ${mappedCount} targets vào các bước trong kịch bản!`);
+    toast.success(`Automatically mapped ${mappedCount} targets to script steps!`);
   };
 
   useEffect(() => {
@@ -497,20 +571,20 @@ const WebcamOcrPanel = ({
 
   const handleSaveOpenAiKey = async () => {
     if (!openaiApiKey.trim()) {
-      toast.error('Vui lòng nhập API Key');
+      toast.error('Please enter an API Key');
       return;
     }
     setIsSavingKey(true);
-    const toastId = toast.loading('Đang kiểm tra và lưu OpenAI API Key...');
+    const toastId = toast.loading('Verifying and saving OpenAI API Key...');
     try {
       const res = await axios.post(`${API_BASE}/webcam/openai-key`, { api_key: openaiApiKey.trim() });
       localStorage.setItem('cnc_openai_api_key', openaiApiKey.trim());
-      toast.success(res.data.message || 'Lưu API Key thành công!', { id: toastId });
+      toast.success(res.data.message || 'API Key saved successfully!', { id: toastId });
       setShowKeyInput(false);
       const statusRes = await axios.get(`${API_BASE}/webcam/openai-status`);
       if (statusRes.data) setOpenaiStatus(statusRes.data);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Lưu API Key thất bại', { id: toastId });
+      toast.error(err.response?.data?.detail || 'Failed to save API Key', { id: toastId });
     } finally {
       setIsSavingKey(false);
     }
@@ -900,8 +974,8 @@ const WebcamOcrPanel = ({
       ratioY = tmp;
     }
 
-    const cncX = Math.round(ratioX * cncWidth + cameraOffsetX);
-    const cncY = Math.round(ratioY * cncHeight + cameraOffsetY);
+    const cncX = Math.round(originX + ratioX * cncWidth + cameraOffsetX);
+    const cncY = Math.round(originY + ratioY * cncHeight + cameraOffsetY);
 
     await runAction('move-rectified-point', async () => {
       const response = await axios.post(`${API_BASE}/cnc/move-to-cnc-point`, {
@@ -944,14 +1018,14 @@ const WebcamOcrPanel = ({
     await runAction('park-cnc', async () => {
       const activeWorkArea = (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : savedWorkArea);
       if (!activeWorkArea || activeWorkArea.length < 4) {
-        toast.error('Chưa có 4 góc khung bàn. Vui lòng bấm "Scan 4-Corner Frame" hoặc định vị 4 góc trước!');
+        toast.error('Workspace 4-corner frame not found. Please click "Scan 4-Corner Frame" or calibrate the 4 corners first!');
         return;
       }
       const corner = activeWorkArea[cornerIdx];
       const px = Array.isArray(corner) ? corner[0] : (corner?.x ?? 0);
       const py = Array.isArray(corner) ? corner[1] : (corner?.y ?? 0);
 
-      toast.loading(`Đang tính tọa độ và di chuyển CNC về Góc ${cornerIdx + 1}...`, { id: 'park-cnc' });
+      toast.loading(`Calculating coordinates and moving CNC to Corner ${cornerIdx + 1}...`, { id: 'park-cnc' });
       await ensureArduinoConnected();
 
       const mapRes = await axios.post(`${API_BASE}/webcam/map-pixel`, {
@@ -977,14 +1051,14 @@ const WebcamOcrPanel = ({
       await refreshCncStatus();
       setParkCornerIndex(cornerIdx);
       markCncMoving(2000);
-      toast.success(`CNC đã đỗ an toàn tại Góc ${cornerIdx + 1} (X: ${Math.round(cnc_x)}, Y: ${Math.round(cnc_y)}). Camera không bị che!`, { id: 'park-cnc', duration: 4000 });
+      toast.success(`CNC parked safely at Corner ${cornerIdx + 1} (X: ${Math.round(cnc_x)}, Y: ${Math.round(cnc_y)}). Camera viewport is clear!`, { id: 'park-cnc', duration: 4000 });
     });
   };
 
   // Lock targets after clean detection
   const handleLockSetup = async () => {
     if (!aiTargets || aiTargets.length === 0) {
-      toast.error('Chưa có targets nào được nhận diện! Vui lòng bấm Detect Elements trước.');
+      toast.error('No targets detected yet! Please click Detect Elements first.');
       return;
     }
     const currentFrame = captureFrame();
@@ -1004,7 +1078,7 @@ const WebcamOcrPanel = ({
     setIsLocked(true);
     setLockedSnapshot(currentFrame);
     setLiveDetect(false); // Disable live re-scan so Z motion never wipes targets
-    toast.success(`🔒 Đã khóa cố định ${aiTargets.length} phím! Chế độ Execute sẽ không bị trục Z làm sai lệch.`, { duration: 4500 });
+    toast.success(`Locked ${aiTargets.length} key targets. Execute mode will not be affected by Z-axis movement.`, { duration: 4500 });
   };
 
   // Unlock to allow re-detecting or editing
@@ -1015,14 +1089,17 @@ const WebcamOcrPanel = ({
       console.warn('Backend setup-lock clear notice:', e);
     }
     setIsLocked(false);
-    toast('Đã mở khóa cấu hình. Bạn có thể Re-Scan hoặc chỉnh sửa phím tự do.', { icon: '🔓' });
+    toast('Configuration unlocked. You can Re-Scan or edit keys freely.');
   };
 
   // Handle Multi-Screen transition: Park to Corner 0, wait for settle, capture clean frame and detect new screen elements
-  const handlePerformScreenTransition = async (stepIdx, scriptList) => {
-    toast.loading(`[Chuyển trang #${stepIdx + 1}] Đang đỗ CNC về Góc để camera sạch 100%...`, { id: 'auto-run' });
+  // Park CNC at the safe corner (clear camera view), wait for the screen to settle, then re-run AI detection.
+  // Used for: initial scan at execution start, screen transitions, and re-scan after the POS is moved.
+  const parkAndRescan = async ({ label = 'Rescan', settleMs = 1600, promptFallback } = {}) => {
+    toast.loading(`[${label}] Parking CNC to corner for clear camera viewport...`, { id: 'auto-run' });
 
     // 1. Move CNC to safe park position (Corner 0) with A lifted
+    markCncMoving(30000);
     try {
       const activeWorkArea = (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : savedWorkArea);
       if (activeWorkArea && activeWorkArea.length >= 4) {
@@ -1049,10 +1126,12 @@ const WebcamOcrPanel = ({
       }
     } catch (parkErr) {
       console.warn('Park on transition error:', parkErr);
+    } finally {
+      markCncMoving(900);
     }
 
     // 2. Wait for phone app transition animation to finish and screen to settle
-    await new Promise((r) => setTimeout(r, 1600));
+    await sleep(settleMs);
 
     // 3. Capture fresh frame
     let newFrame = captureFrame();
@@ -1062,16 +1141,16 @@ const WebcamOcrPanel = ({
     }
     if (!newFrame) return null;
 
-    toast.loading(`[Màn hình tiếp theo] Camera đã sạch. AI Vision đang quét nhận diện các nút...`, { id: 'auto-run' });
+    toast.loading(`[${label}] Viewport clear. AI Vision is scanning and detecting elements...`, { id: 'auto-run' });
 
     try {
       const activeWorkArea = (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : savedWorkArea);
-      const detectPrompt = aiPrompt.trim() || 'all buttons, continue, confirm, amount options, and key items on device screen';
+      const detectPrompt = aiPrompt.trim() || promptFallback || 'All keypad keys 0-9, Clear C, Backspace, Cancel button, Pay button, and app icons on POS screen';
       const detectRes = await axios.post(`${API_BASE}/webcam/ai-detect`, {
         image_data: newFrame,
         work_area: activeWorkArea,
         prompt: detectPrompt,
-        model_type: aiModel || 'gpt4o',
+        model_type: aiModel || 'hybrid',
         cnc_width: cncWidth,
         cnc_height: cncHeight,
         invert_x: invertX,
@@ -1086,15 +1165,20 @@ const WebcamOcrPanel = ({
         }));
         setAiTargets(newDetected);
         if (detectRes.data.warped_preview) setWarpedPreview(detectRes.data.warped_preview);
-        toast.success(`[Màn hình tiếp theo] Nhận diện ${newDetected.length} nút mới thành công!`, { id: 'auto-run', duration: 4000 });
+        toast.success(`[${label}] Successfully detected ${newDetected.length} elements!`, { id: 'auto-run', duration: 4000 });
         return newDetected;
       }
     } catch (e) {
       console.warn('Screen transition AI detect warning:', e);
-      toast.error(`Không thể quét màn hình mới: ${e.message}`, { id: 'auto-run' });
+      toast.error(`[${label}] Unable to scan screen: ${e.message}`, { id: 'auto-run' });
     }
     return null;
   };
+
+  const handlePerformScreenTransition = (stepIdx) => parkAndRescan({
+    label: `Transition #${stepIdx + 1}`,
+    settleMs: 1600,
+  });
 
 
 
@@ -1110,7 +1194,7 @@ const WebcamOcrPanel = ({
     const payload = {
       image_data: imageData,
       work_area: activeWorkArea,
-      prompt: aiPrompt.trim() || 'all numeric keys 1, 2, 3, 4, and Enter OK buttons on ATM keypad',
+      prompt: aiPrompt.trim() || 'All keypad keys 0-9, Clear C, Backspace, Cancel button, Pay button, and app icons on POS screen',
       model_type: aiModel,
       api_key: openaiApiKey.trim() || undefined,
       origin_x: originX,
@@ -1332,7 +1416,7 @@ const WebcamOcrPanel = ({
 
       isDetecting = true;
       screenState = 'DETECTING';
-      setStatus(reason === 'init' ? '🔍 Initial scan...' : '🔍 Detecting screen...');
+      setStatus(reason === 'init' ? 'Initial scan...' : 'Detecting screen...');
 
       // Never stay stuck waiting for the server: give up after 8s and re-scan
       clearWatchdog();
@@ -1340,7 +1424,7 @@ const WebcamOcrPanel = ({
         if (!isDetecting) return;
         isDetecting = false;
         baselineLuma = null; // forces a fresh scan on the next tick
-        setStatus('⚠️ Detect timeout, retrying...');
+        setStatus('Detect timeout, retrying...');
       }, 8000);
 
       sendFrameBlob();
@@ -1355,7 +1439,7 @@ const WebcamOcrPanel = ({
 
       // 1. Guard against CNC mechanical motion: Ignore camera motion while CNC is active or during post-move cooldown
       if (Date.now() < cncActiveUntilRef.current) {
-        setLiveStatus('🤖 CNC moving (Detection paused)');
+        setLiveStatus('CNC moving (Detection paused)');
         stableStartTime = null;
         screenState = 'STABLE';
         justFinishedCncMotion = true;
@@ -1385,7 +1469,7 @@ const WebcamOcrPanel = ({
       if (stepDiff > MOTION_THRESHOLD) {
         screenState = 'CHANGING';
         stableStartTime = null;
-        setStatus('⚡ Screen changing...');
+        setStatus('Screen changing...');
         return;
       }
 
@@ -1396,7 +1480,7 @@ const WebcamOcrPanel = ({
         if (drift.avgDiff >= MIN_SCREEN_CHANGE && drift.changedBlockRatio >= MIN_GLOBAL_BLOCK_RATIO) {
           screenState = 'CHANGING';
           stableStartTime = null;
-          setStatus('⚡ Screen changing...');
+          setStatus('Screen changing...');
           return;
         }
       }
@@ -1408,7 +1492,7 @@ const WebcamOcrPanel = ({
           stableStartTime = now;
         }
         const settledMs = Math.round(now - stableStartTime);
-        setStatus('⏳ Settling...');
+        setStatus('Settling...');
 
         if (settledMs >= SETTLE_DELAY_MS) {
           // Stationary long enough: perform 64-block spatial analysis to distinguish global page transition from local stylus obstruction
@@ -1417,7 +1501,7 @@ const WebcamOcrPanel = ({
           if (avgDiff >= MIN_SCREEN_CHANGE && changedBlockRatio >= MIN_GLOBAL_BLOCK_RATIO) {
             if (isLocked) {
               screenState = 'STABLE';
-              setLiveStatus('🔒 Targets Locked (Setup Mode)');
+              setLiveStatus('Targets Locked (Setup Mode)');
               return;
             }
             // True global screen transition: drop the old overlay immediately, then detect the new page
@@ -1428,11 +1512,11 @@ const WebcamOcrPanel = ({
             // Localized obstruction (e.g. CNC toolhead / stylus resting at Key 6)
             // Screen beneath remains the same -> DO NOT re-detect, maintain locked targets
             screenState = 'STABLE';
-            setLiveStatus(`🔒 Locked · Stylus at key (${changedBlocks}/64 blocks, screen unchanged)`);
+            setLiveStatus(`Locked · Stylus at key (${changedBlocks}/64 blocks, screen unchanged)`);
           } else {
             // Reverted back to the original screen (transient stylus pass / hand shadow has gone)
             screenState = 'STABLE';
-            setLiveStatus((curr) => (curr.startsWith('🔒') ? curr : '🔒 Screen locked'));
+            setLiveStatus((curr) => (curr.startsWith('Locked') ? curr : 'Screen locked'));
           }
         }
       }
@@ -1472,7 +1556,7 @@ const WebcamOcrPanel = ({
               screenState = 'CHANGING';
               stableStartTime = null;
               isDetecting = false;
-              setStatus('⚡ Screen changed during scan, re-scanning...');
+              setStatus('Screen changed during scan, re-scanning...');
               return;
             }
           }
@@ -1491,7 +1575,7 @@ const WebcamOcrPanel = ({
             prevLuma = nowLuma;
           }
           screenState = 'STABLE';
-          setStatus(`🔒 Locked · ${finalTargets.length} targets`);
+          setStatus(`Locked · ${finalTargets.length} targets`);
           isDetecting = false;
         } catch {
           /* ignore malformed message */
@@ -1535,6 +1619,22 @@ const WebcamOcrPanel = ({
     } else {
       handleRunAiDetection();
     }
+  };
+
+  // Toggle X coordinate sign between positive and negative
+  const handleToggleInvertXSign = () => {
+    setOriginX((prev) => -prev);
+    setCncWidth((prev) => -prev);
+    setKey1X((prev) => -prev);
+    setSpacingX((prev) => -prev);
+
+    setAiTargets((prevTargets) =>
+      prevTargets.map((t) => ({
+        ...t,
+        cnc_x: typeof t.cnc_x === 'number' ? Math.round(-t.cnc_x * 10) / 10 : t.cnc_x,
+      }))
+    );
+    toast.success('Đã đảo ngược dấu trục X (CNC X sign inverted)!');
   };
 
   // Smart Auto-Fill for Missing Keypad Numbers (1..9, 0) based on detected matrix grid spacing
@@ -1689,7 +1789,7 @@ const WebcamOcrPanel = ({
 
     if (newItems.length > 0) {
       setAiTargets((prev) => [...prev, ...newItems]);
-      toast.success(`✨ Auto-filled ${newItems.length} missing keys (${newItems.map((i) => i.label).join(', ')})!`, { id: toastId });
+      toast.success(`Auto-filled ${newItems.length} missing keys (${newItems.map((i) => i.label).join(', ')})!`, { id: toastId });
     } else {
       toast.error('Could not auto-fill missing keys.', { id: toastId });
     }
@@ -1861,6 +1961,87 @@ const WebcamOcrPanel = ({
     toast.success('Sequence execution completed!');
   };
 
+  // ---- Execution displacement watchdog ----
+  // Live-detect is paused while a script runs (to avoid re-detecting every time the toolhead covers the screen).
+  // This watchdog only samples the work area while the CNC is idle (outside cncActiveUntilRef), and re-anchors
+  // its reference frame after every CNC move. So the toolhead resting on a key is part of the reference and is
+  // never counted as a change. A GLOBAL change that appears while the CNC is idle (POS moved by hand, or the
+  // screen changed on its own) marks the detected targets as stale -> runner re-parks & re-detects.
+  const createDisplacementWatchdog = () => {
+    const MOTION_THRESHOLD = 7.5;        // per-tick mean luma diff = something is moving
+    const MIN_SCREEN_CHANGE = 8.2;       // mean diff vs reference to count as a real change
+    const MIN_GLOBAL_BLOCK_RATIO = 0.28; // >= 18/64 blocks changed = global (not a local stylus obstruction)
+    const SETTLE_MS = 500;
+    const TICK_MS = 150;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = WATCH_SAMPLE_DIM;
+    canvas.height = WATCH_SAMPLE_DIM;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    let refLuma = null;
+    let prevLuma = null;
+    let motionActive = false;
+    let lastMotionAt = 0;
+    let displaced = null;
+    let paused = false;
+
+    const resetAnchor = () => { refLuma = null; prevLuma = null; motionActive = false; };
+
+    const tick = () => {
+      if (paused) return;
+      // CNC moving (or post-move cooldown): ignore, re-anchor once it stops
+      if (Date.now() < cncActiveUntilRef.current) { resetAnchor(); return; }
+
+      const curr = sampleWorkAreaLuma(videoRef.current, liveCfgRef.current?.work_area, ctx);
+      if (!curr) return;
+      if (!refLuma) { refLuma = curr; prevLuma = curr; return; }
+
+      const now = performance.now();
+      const stepDiff = lumaMeanDiff(curr, prevLuma);
+      prevLuma = curr;
+
+      if (stepDiff > MOTION_THRESHOLD) { motionActive = true; lastMotionAt = now; return; }
+
+      if (!motionActive) {
+        // Slow push / slide that never exceeds the per-tick threshold
+        const drift = lumaBlockDiff(curr, refLuma);
+        if (drift.avgDiff >= MIN_SCREEN_CHANGE && drift.changedBlockRatio >= MIN_GLOBAL_BLOCK_RATIO) {
+          motionActive = true;
+          lastMotionAt = now;
+        }
+        return;
+      }
+
+      if (now - lastMotionAt < SETTLE_MS) return;
+
+      // Motion stopped and scene is still: compare against the reference taken at the same toolhead position
+      motionActive = false;
+      const d = lumaBlockDiff(curr, refLuma);
+      if (d.avgDiff >= MIN_SCREEN_CHANGE && d.changedBlockRatio >= MIN_GLOBAL_BLOCK_RATIO) {
+        displaced = d;
+      }
+      refLuma = curr;
+    };
+
+    const timer = setInterval(tick, TICK_MS);
+
+    return {
+      isMoving: () => motionActive,
+      takeDisplaced: () => { const d = displaced; displaced = null; return d; },
+      waitUntilSettled: async (maxMs = 5000) => {
+        const start = Date.now();
+        while (motionActive && !paused && Date.now() - start < maxMs && !stopScriptRef.current) {
+          await sleep(120);
+        }
+      },
+      reset: () => { displaced = null; resetAnchor(); },
+      pause: () => { paused = true; resetAnchor(); },
+      resume: () => { paused = false; },
+      stop: () => clearInterval(timer),
+    };
+  };
+
   // Automated Script Runner triggered from AI Test Studio
   const handleStopScriptRunner = () => {
     stopScriptRef.current = true;
@@ -1892,52 +2073,36 @@ const WebcamOcrPanel = ({
     setRunningSequence(true);
     toast.loading('Starting automated test script execution...', { id: 'auto-run' });
 
+    const watchdog = createDisplacementWatchdog();
+    // Park + re-detect with the watchdog paused (park motion / settle wait must not count as displacement)
+    const rescanWithWatchdog = async (opts) => {
+      watchdog.pause();
+      try {
+        return await parkAndRescan(opts);
+      } finally {
+        watchdog.reset();
+        watchdog.resume();
+      }
+    };
+
     try {
       // 0. Auto-connect Arduino COM port if not already connected
       await ensureArduinoConnected();
       await refreshCncStatus();
 
-      // 1. Capture current frame from fixed camera angle
-      let currentFrame = captureFrame();
-      if (!currentFrame) {
-        await new Promise((r) => setTimeout(r, 600));
-        currentFrame = captureFrame();
-      }
-
-      const fixedWorkArea = savedWorkArea || (calibrationPoints.length === 4 ? calibrationPoints.map((p) => [p.x, p.y]) : null);
-
-      // 2. Run element detection on the fixed camera frame
-      let detected = aiTargets.length > 0 ? aiTargets : [];
-      if (detected.length === 0 && currentFrame) {
-        toast.loading('Detecting screen elements & keypad targets...', { id: 'auto-run' });
-        setLoading('ai-detect');
-        try {
-          const detectPrompt = aiPrompt.trim() || 'all numeric keys 1, 2, 3, 4, and Enter OK buttons on ATM keypad';
-          const detectRes = await axios.post(`${API_BASE}/webcam/ai-detect`, {
-            image_data: currentFrame,
-            work_area: fixedWorkArea,
-            prompt: detectPrompt,
-            model_type: aiModel || 'hybrid',
-            cnc_width: cncWidth,
-            cnc_height: cncHeight,
-            invert_x: invertX,
-            invert_y: invertY,
-            swap_xy: swapXY,
-          });
-
-          if (detectRes.data?.success && detectRes.data?.objects) {
-            detected = detectRes.data.objects.map((obj) => ({
-              ...obj,
-              label: formatLabelToEnglish(obj.label),
-            }));
-            setAiTargets(detected);
-            if (detectRes.data.warped_preview) setWarpedPreview(detectRes.data.warped_preview);
-          }
-        } catch (detectErr) {
-          console.warn('AI detect fallback:', detectErr);
-        } finally {
-          setLoading('');
-        }
+      // 1-2. ALWAYS park & re-detect at start: the POS may have been moved since the last detection.
+      // Falls back to the previous targets only if the fresh scan fails.
+      setLoading('ai-detect');
+      let detected = [];
+      try {
+        const fresh = await rescanWithWatchdog({
+          label: 'Initial scan',
+          settleMs: 700,
+          promptFallback: 'all numeric keys 1, 2, 3, 4, and Enter OK buttons on ATM keypad',
+        });
+        detected = (fresh && fresh.length > 0) ? fresh : aiTargets;
+      } finally {
+        setLoading('');
       }
 
       // 3. Sequentially execute each test step in script
@@ -1961,13 +2126,78 @@ const WebcamOcrPanel = ({
 
         // If step is a dedicated TRANSITION_SCREEN step, perform park & scan and proceed
         if (step.action === 'TRANSITION_SCREEN') {
-          toast.loading(`[Bước ${i + 1}/${scriptToRun.length}] Chuyển trang: Đang đỗ CNC về góc & quét màn hình mới...`, { id: 'auto-run' });
-          const nextDetected = await handlePerformScreenTransition(i, scriptToRun);
+          toast.loading(`[Step ${i + 1}/${scriptToRun.length}] Screen transition: Parking CNC to corner & scanning new screen...`, { id: 'auto-run' });
+          const nextDetected = await rescanWithWatchdog({ label: `Transition #${i + 1}`, settleMs: 1600 });
           if (nextDetected && nextDetected.length > 0) {
             detected = nextDetected;
           }
           if (onStepUpdate) onStepUpdate(i, 'passed');
           continue;
+        }
+
+        // Dedicated Card Servo Actions (Insert / Eject / Swipe Card)
+        if (step.action === 'INSERT_CARD') {
+          const sec = parseInt(step.value) || 2;
+          toast.loading(`[Step ${i + 1}/${scriptToRun.length}] Inserting card (Servo D33 - ${sec}s)...`, { id: 'auto-run' });
+          try {
+            await axios.post(`${API_BASE}/card/insert`, { seconds: sec });
+            toast.success(`Card inserted successfully!`, { id: 'auto-run' });
+          } catch (cErr) {
+            console.warn('Card insert error:', cErr);
+            toast.error(`Error inserting card: ${cErr?.response?.data?.detail || cErr.message}`, { id: 'auto-run' });
+          }
+          if (step.delay_ms) await new Promise((r) => setTimeout(r, step.delay_ms));
+          if (onStepUpdate) onStepUpdate(i, 'passed');
+          continue;
+        }
+
+        if (step.action === 'EJECT_CARD') {
+          const sec = parseInt(step.value) || 2;
+          toast.loading(`[Step ${i + 1}/${scriptToRun.length}] Ejecting card (Servo D33 - ${sec}s)...`, { id: 'auto-run' });
+          try {
+            await axios.post(`${API_BASE}/card/eject`, { seconds: sec });
+            toast.success(`Card ejected successfully!`, { id: 'auto-run' });
+          } catch (cErr) {
+            console.warn('Card eject error:', cErr);
+            toast.error(`Error ejecting card: ${cErr?.response?.data?.detail || cErr.message}`, { id: 'auto-run' });
+          }
+          if (step.delay_ms) await new Promise((r) => setTimeout(r, step.delay_ms));
+          if (onStepUpdate) onStepUpdate(i, 'passed');
+          continue;
+        }
+
+        if (step.action === 'SWIPE_CARD') {
+          const sec = parseInt(step.value) || 2;
+          toast.loading(`[Step ${i + 1}/${scriptToRun.length}] Swiping card (Servo D12 - ${sec}s)...`, { id: 'auto-run' });
+          try {
+            await axios.post(`${API_BASE}/card/swipe`, { seconds: sec });
+            toast.success(`Card swiped successfully!`, { id: 'auto-run' });
+          } catch (cErr) {
+            console.warn('Card swipe error:', cErr);
+            toast.error(`Error swiping card: ${cErr?.response?.data?.detail || cErr.message}`, { id: 'auto-run' });
+          }
+          if (step.delay_ms) await new Promise((r) => setTimeout(r, step.delay_ms));
+          if (onStepUpdate) onStepUpdate(i, 'passed');
+          continue;
+        }
+
+        // Displacement watchdog: if the POS was moved (or the screen changed by itself) while the CNC was idle,
+        // the current coordinates are stale -> wait for the hand to stop, then park & re-detect before clicking.
+        if (watchdog.isMoving()) {
+          toast.loading(`[Step ${i + 1}/${scriptToRun.length}] Movement detected in work area, waiting to settle...`, { id: 'auto-run' });
+          await watchdog.waitUntilSettled(5000);
+        }
+        const displacement = watchdog.takeDisplaced();
+        if (displacement && !stopScriptRef.current) {
+          toast.loading(`[Step ${i + 1}/${scriptToRun.length}] POS moved / screen changed (${displacement.changedBlocks}/64 blocks). Re-detecting...`, { id: 'auto-run' });
+          const reDetected = await rescanWithWatchdog({ label: `Re-detect before step ${i + 1}`, settleMs: 700 });
+          if (reDetected && reDetected.length > 0) {
+            detected = reDetected;
+          }
+        }
+        if (stopScriptRef.current) {
+          toast('Execution stopped by user!', { id: 'auto-run' });
+          break;
         }
 
         // Match exact target element from detected camera objects
@@ -1983,6 +2213,7 @@ const WebcamOcrPanel = ({
           if (matched?.id) setSelectedTargetId(matched.id);
           toast.loading(`[Step ${i + 1}/${scriptToRun.length}] Moving CNC to ${matched?.label || step.target} (X: ${targetCncX}, Y: ${targetCncY})...`, { id: 'auto-run' });
 
+          markCncMoving(30000);
           try {
             await axios.post(`${API_BASE}/cnc/move-to-cnc-point`, {
               target_x: targetCncX,
@@ -2008,6 +2239,8 @@ const WebcamOcrPanel = ({
           } catch (mErr) {
             console.warn('CNC move-to-cnc-point warning:', mErr);
             toast.error(`CNC error at ${step.target}: ${mErr?.response?.data?.detail || mErr.message}`, { id: 'auto-run' });
+          } finally {
+            markCncMoving(1200);
           }
           await refreshCncStatus();
           if (step.delay_ms) await new Promise((r) => setTimeout(r, step.delay_ms));
@@ -2029,6 +2262,7 @@ const WebcamOcrPanel = ({
             press_a: step.action === 'CLICK' || step.action === 'TYPE' || autoPressA,
           };
 
+          markCncMoving(30000);
           try {
             const moveRes = await axios.post(`${API_BASE}/cnc/move-pen-to-pixel`, movePayload);
             if (moveRes.data?.target_pixel) {
@@ -2042,6 +2276,8 @@ const WebcamOcrPanel = ({
             }
           } catch (mErr) {
             console.warn('CNC move warning:', mErr);
+          } finally {
+            markCncMoving(1200);
           }
           await refreshCncStatus();
           if (step.delay_ms) await new Promise((r) => setTimeout(r, step.delay_ms));
@@ -2052,9 +2288,9 @@ const WebcamOcrPanel = ({
           if (onStepUpdate) onStepUpdate(i, 'passed');
         }
 
-        // Auto transition to next screen if step specifies park_after (e.g. clicking Enter/Next/Tiếp tục)
+        // Auto transition to next screen if step specifies park_after (e.g. clicking Enter/Next/Continue)
         if (step.park_after && i < scriptToRun.length - 1 && !stopScriptRef.current) {
-          const nextDetected = await handlePerformScreenTransition(i, scriptToRun);
+          const nextDetected = await rescanWithWatchdog({ label: `Transition #${i + 1}`, settleMs: 1600 });
           if (nextDetected && nextDetected.length > 0) {
             detected = nextDetected;
           }
@@ -2097,6 +2333,7 @@ const WebcamOcrPanel = ({
       toast.error(`Script execution error: ${err.message}`, { id: 'auto-run' });
       if (onCompleteExecution) onCompleteExecution(false);
     } finally {
+      watchdog.stop();
       setRunningSequence(false);
       setCurrentExecutingStep(null);
       markCncMoving(2200);
@@ -2622,38 +2859,38 @@ const WebcamOcrPanel = ({
         <div className="bg-white/80 backdrop-blur-xs p-3.5 rounded-2xl border border-slate-200 shadow-xs mb-3">
           <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2.5 flex items-center justify-between">
             <span className="flex items-center gap-1.5">
-              <span>🚀 Happy Flow (Zero-Obstruction Pipeline):</span>
+              <span>Execution Pipeline (Zero-Obstruction):</span>
               {isLocked && (
                 <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-1">
-                  <span>🔒</span> ĐÃ KHÓA ({aiTargets.length} NÚT BẤM)
+                  LOCKED ({aiTargets.length} TARGETS)
                 </span>
               )}
             </span>
             <span className="text-[10px] text-slate-400 font-normal hidden sm:inline">
-              1. Park Góc &rarr; 2. Scan Sạch &rarr; 3. Khóa Nút &rarr; 4. Execute Mượt
+              1. Park Corner &rarr; 2. Scan Viewport &rarr; 3. Lock Targets &rarr; 4. Execute Smoothly
             </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-            {/* Bước 1: Park to Corner (Đưa CNC về góc bàn để camera sạch) */}
+            {/* Step 1: Park to Corner (Move CNC to corner for clear camera viewport) */}
             <div className="flex items-center gap-2 p-2.5 rounded-xl border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-50 transition-all">
               <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
                 1
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-bold text-indigo-950 flex items-center justify-between">
-                  <span>Park về Góc</span>
+                  <span>Park to Corner</span>
                   <select
                     className="text-[10px] bg-white border border-indigo-300 rounded px-1 py-0.5 text-indigo-900 font-semibold cursor-pointer"
                     value={parkCornerIndex}
                     onChange={(e) => setParkCornerIndex(Number(e.target.value))}
                     disabled={busy}
-                    title="Chọn góc bàn để đỗ CNC ra xa khỏi camera"
+                    title="Select corner to park CNC away from camera viewport"
                   >
-                    <option value={0}>Góc 1 (TL)</option>
-                    <option value={1}>Góc 2 (TR)</option>
-                    <option value={2}>Góc 3 (BR)</option>
-                    <option value={3}>Góc 4 (BL)</option>
+                    <option value={0}>Corner 1 (TL)</option>
+                    <option value={1}>Corner 2 (TR)</option>
+                    <option value={2}>Corner 3 (BR)</option>
+                    <option value={3}>Corner 4 (BL)</option>
                   </select>
                 </div>
                 <button
@@ -2662,12 +2899,12 @@ const WebcamOcrPanel = ({
                   disabled={busy}
                   className="mt-1.5 w-full text-center text-[11px] font-bold py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white transition-all shadow-xs cursor-pointer"
                 >
-                  📍 Đỗ Z Ra Góc {parkCornerIndex + 1}
+                  Park Z to Corner {parkCornerIndex + 1}
                 </button>
               </div>
             </div>
 
-            {/* Bước 2: Detect Elements (Chụp khi Z đã ra ngoài) */}
+            {/* Step 2: Detect Elements (Capture when Z is parked outside) */}
             <div className={`flex items-center gap-2 p-2.5 rounded-xl border transition-all ${
               loading === 'ai-detect'
                 ? 'border-sky-400 bg-sky-50 shadow-md ring-2 ring-sky-300'
@@ -2684,11 +2921,11 @@ const WebcamOcrPanel = ({
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                  <span>{loading === 'ai-detect' ? 'Đang quét...' : 'Detect Nút Bấm'}</span>
+                  <span>{loading === 'ai-detect' ? 'Scanning...' : 'Detect Elements'}</span>
                   <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full ${
                     aiTargets.length > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'
                   }`}>
-                    {aiTargets.length > 0 ? `${aiTargets.length} nút` : '0 nút'}
+                    {aiTargets.length > 0 ? `${aiTargets.length} targets` : '0 targets'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-[9px] font-semibold mt-1">
@@ -2696,7 +2933,7 @@ const WebcamOcrPanel = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                     <span>
                       {aiModel === 'hybrid'
-                        ? '⭐ Hybrid: YOLO (Toạ độ) + GPT-4o'
+                        ? 'Hybrid: YOLO (Coords) + GPT-4o'
                         : aiModel.startsWith('gpt')
                           ? (aiModel === 'gpt4o-mini' ? 'GPT-4o-mini (~0.8s)' : 'GPT-4o Vision')
                           : 'YOLO (RAM Cached)'}
@@ -2707,9 +2944,9 @@ const WebcamOcrPanel = ({
                     onClick={() => handleWarmupModel(true)}
                     disabled={isWarmingUp}
                     className="text-[9px] px-1.5 py-0.5 bg-sky-100 hover:bg-sky-200 text-sky-800 rounded font-bold cursor-pointer transition-colors"
-                    title="Nạp trước mô hình vào bộ nhớ để khi bấm Quét sẽ phản hồi tức thì"
+                    title="Preload models into memory for instant detection response"
                   >
-                    {isWarmingUp ? 'Đang nạp...' : '⚡ Nạp trước'}
+                    {isWarmingUp ? 'Preloading...' : 'Preload'}
                   </button>
                 </div>
                 <button
@@ -2717,14 +2954,14 @@ const WebcamOcrPanel = ({
                   onClick={handleRunAiDetection}
                   disabled={busy}
                   className="mt-1.5 w-full text-center text-[11px] font-bold py-1.5 px-2 rounded-lg bg-[#01a9ac] hover:bg-[#019497] active:scale-95 text-white transition-all shadow-xs cursor-pointer"
-                  title="Chụp ảnh khi camera không bị Z che và nhận diện phím"
+                  title="Capture image when camera is unobstructed and detect keys"
                 >
-                  🔍 Quét AI Nhận Diện
+                  AI Vision Scan
                 </button>
               </div>
             </div>
 
-            {/* Bước 3: Lock Kịch Bản / Unlock */}
+            {/* Step 3: Lock Script / Unlock */}
             <div className={`flex items-center gap-2 p-2.5 rounded-xl border transition-all ${
               isLocked
                 ? 'border-emerald-300 bg-emerald-50/80 shadow-xs ring-1 ring-emerald-300'
@@ -2737,7 +2974,7 @@ const WebcamOcrPanel = ({
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                  <span>{isLocked ? 'Đã Khóa Targets' : 'Khóa Kịch Bản'}</span>
+                  <span>{isLocked ? 'Targets Locked' : 'Lock Script'}</span>
                   <span className={`text-[9px] font-extrabold px-1.5 py-0.2 rounded-full ${
                     isLocked ? 'bg-emerald-600 text-white' : 'bg-amber-100 text-amber-800'
                   }`}>
@@ -2750,9 +2987,9 @@ const WebcamOcrPanel = ({
                     onClick={handleLockSetup}
                     disabled={busy || aiTargets.length === 0}
                     className="mt-1.5 w-full text-center text-[11px] font-bold py-1.5 px-2 rounded-lg bg-amber-500 hover:bg-amber-600 active:scale-95 text-white transition-all shadow-xs cursor-pointer disabled:opacity-50"
-                    title="Khóa cố định vị trí các phím để khi Z chạy không bị re-detect làm sai"
+                    title="Lock target positions so moving Z does not trigger re-detection errors"
                   >
-                    🔒 Khóa Vị Trí Phím
+                    Lock Key Positions
                   </button>
                 ) : (
                   <button
@@ -2760,15 +2997,15 @@ const WebcamOcrPanel = ({
                     onClick={handleUnlockSetup}
                     disabled={busy}
                     className="mt-1.5 w-full text-center text-[11px] font-bold py-1.5 px-2 rounded-lg bg-white border border-emerald-400 hover:bg-emerald-100 active:scale-95 text-emerald-800 transition-all shadow-xs cursor-pointer"
-                    title="Mở khóa nếu bạn muốn đổi màn hình hoặc quét lại phím"
+                    title="Unlock to change screen or re-scan targets"
                   >
-                    🔓 Mở Khóa / Quét Lại
+                    Unlock / Re-scan
                   </button>
                 )}
               </div>
             </div>
 
-            {/* Bước 4: Execute CNC */}
+            {/* Step 4: Execute CNC */}
             <div className="flex items-center gap-2 p-2.5 rounded-xl border border-emerald-400 bg-gradient-to-br from-emerald-500/10 to-teal-500/20">
               <div className="w-7 h-7 rounded-lg bg-gradient-to-r from-[#0ac282] to-[#0df3a3] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
                 4
@@ -2777,7 +3014,7 @@ const WebcamOcrPanel = ({
                 <div className="text-xs font-extrabold text-slate-800 flex items-center justify-between">
                   <span>Execute CNC</span>
                   <span className="text-[9px] font-bold text-emerald-700 bg-white/80 px-1 rounded">
-                    {runningSequence ? 'RUNNING' : 'TỰ ĐỘNG'}
+                    {runningSequence ? 'RUNNING' : 'AUTO RUN'}
                   </span>
                 </div>
                 {!runningSequence ? (
@@ -2786,9 +3023,9 @@ const WebcamOcrPanel = ({
                     onClick={() => handleStartScriptRunner(activeTestScript)}
                     disabled={busy || aiTargets.length === 0}
                     className="mt-1.5 w-full text-center text-[11px] font-extrabold py-1.5 px-2 rounded-lg bg-gradient-to-r from-[#0ac282] to-[#0df3a3] hover:brightness-105 active:scale-95 text-white transition-all shadow-xs cursor-pointer disabled:opacity-50"
-                    title="Thực thi kịch bản bằng tọa độ đã khóa (trục Z di chuyển không ảnh hưởng)"
+                    title="Execute test script with locked coordinates (moving Z axis has no interference)"
                   >
-                    ⚡ Chạy Kịch Bản &rarr;
+                    Execute Script &rarr;
                   </button>
                 ) : (
                   <button
@@ -2796,7 +3033,7 @@ const WebcamOcrPanel = ({
                     onClick={handleStopScriptRunner}
                     className="mt-1.5 w-full text-center text-[11px] font-bold py-1.5 px-2 rounded-lg bg-red-500 hover:bg-red-600 active:scale-95 text-white transition-all shadow-xs cursor-pointer"
                   >
-                    ⏹ Dừng Khẩn Cấp
+                    Emergency Stop
                   </button>
                 )}
               </div>
@@ -2832,7 +3069,7 @@ const WebcamOcrPanel = ({
             }
           }}
         >
-          📐 4-Point ROI & CNC Mapping
+          4-Point ROI & CNC Mapping
         </button>
 
         <button
@@ -2868,7 +3105,7 @@ const WebcamOcrPanel = ({
                 disabled={busy || isAutoMeasuring}
                 className="webcam-ocr-button webcam-ocr-button--capture"
               >
-                🔍 AUTO DETECT STYLUS
+                AUTO DETECT STYLUS
               </button>
               <button
                 type="button"
@@ -2877,7 +3114,7 @@ const WebcamOcrPanel = ({
                 className={`webcam-ocr-button ${manualPenPickMode ? 'webcam-ocr-button--primary' : 'webcam-ocr-button--quiet'}`}
                 title="Click directly on the stylus pen tip on the preview screen"
               >
-                {manualPenPickMode ? '📍 CLICK ON VIDEO TO PICK...' : '📍 MANUAL PICK'}
+                {manualPenPickMode ? 'CLICK ON VIDEO TO PICK...' : 'MANUAL PICK'}
               </button>
             </div>
           </div>
@@ -2974,10 +3211,10 @@ const WebcamOcrPanel = ({
               <span className="font-semibold text-slate-200">
                 {openaiStatus.configured
                   ? `OpenAI API Key: ${openaiStatus.masked_key}`
-                  : 'Chưa cấu hình OpenAI API Key'}
+                  : 'OpenAI API Key not configured'}
               </span>
               <span className="text-[11px] text-slate-400 hidden sm:inline">
-                (Dùng {aiModel === 'gpt4o' ? 'GPT-4o (Độ chính xác cao)' : 'GPT-4o-mini (Nhanh)'} phát hiện nút bấm & màn hình)
+                (Using {aiModel === 'gpt4o' ? 'GPT-4o (High Accuracy)' : 'GPT-4o-mini (Fast)'} for button & screen detection)
               </span>
             </div>
             <button
@@ -2985,7 +3222,7 @@ const WebcamOcrPanel = ({
               onClick={() => setShowKeyInput((v) => !v)}
               className="text-xs text-sky-400 hover:text-sky-300 underline font-medium cursor-pointer"
             >
-              {showKeyInput ? 'Đóng' : 'Đổi / Nhập API Key'}
+              {showKeyInput ? 'Close' : 'Change / Enter API Key'}
             </button>
           </div>
 
@@ -2995,7 +3232,7 @@ const WebcamOcrPanel = ({
                 type="password"
                 value={openaiApiKey}
                 onChange={(e) => setOpenaiApiKey(e.target.value)}
-                placeholder="Dán OpenAI API Key (sk-proj-...)"
+                placeholder="Paste OpenAI API Key (sk-proj-...)"
                 className="flex-1 bg-slate-950 px-3 py-1.5 rounded-lg text-xs text-white border border-slate-700 focus:outline-none focus:border-sky-500"
               />
               <button
@@ -3004,7 +3241,7 @@ const WebcamOcrPanel = ({
                 disabled={isSavingKey}
                 className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold disabled:opacity-50 cursor-pointer"
               >
-                {isSavingKey ? 'Đang lưu...' : 'Lưu Key'}
+                {isSavingKey ? 'Saving...' : 'Save Key'}
               </button>
             </div>
           )}
@@ -3023,23 +3260,23 @@ const WebcamOcrPanel = ({
             <label>
               AI Model
               <select value={aiModel} onChange={(e) => setAiModel(e.target.value)} disabled={busy}>
-                <option value="hybrid">⭐ Hybrid: YOLO (Toạ độ chuẩn 100%) + GPT-4o (Tên nút)</option>
-                <option value="gpt4o">🌟 OpenAI GPT-4o (Độ nét cao - ~2s)</option>
-                <option value="gpt4o-mini">⚡ OpenAI GPT-4o-mini (Nhanh ~0.8s & Chuẩn chữ)</option>
-                <option value="yolo">🤖 YOLO Offline Model (best.pt - Toạ độ chuẩn)</option>
-                <option value="opencv">📐 OpenCV Contours & Shapes (Offline)</option>
+                <option value="hybrid">Hybrid: YOLO (100% Precise Coords) + GPT-4o (Button Names)</option>
+                <option value="gpt4o">OpenAI GPT-4o (High Resolution - ~2s)</option>
+                <option value="gpt4o-mini">OpenAI GPT-4o-mini (Fast ~0.8s & Accurate Text)</option>
+                <option value="yolo">YOLO Offline Model (best.pt - Precise Coords)</option>
+                <option value="opencv">OpenCV Contours & Shapes (Offline)</option>
               </select>
             </label>
             <label>
-              Kiểu hiển thị
+              Display Style
               <select
                 value={overlayMode}
                 onChange={(e) => handleSetOverlayMode(e.target.value)}
                 disabled={busy}
               >
-                <option value="box">📦 Bounding Box</option>
-                <option value="circle">⭕ Khung tròn đánh số</option>
-                <option value="both">🔲 Cả hai (Box + Tròn)</option>
+                <option value="box">Bounding Box</option>
+                <option value="circle">Numbered Circle</option>
+                <option value="both">Both (Box + Circle)</option>
               </select>
             </label>
           </div>
@@ -3055,9 +3292,9 @@ const WebcamOcrPanel = ({
                 color: '#ffffff',
                 fontWeight: 700,
               }}
-              title="Nạp trước mô hình AI vào bộ nhớ / kết nối mạng để lần quét tới phản hồi nhanh tức thì"
+              title="Preload AI models into memory/network for instant subsequent detection"
             >
-              {isWarmingUp ? '⏳ ĐANG NẠP TRƯỚC...' : '⚡ NẠP TRƯỚC MODEL (WARMUP)'}
+              {isWarmingUp ? 'PRELOADING...' : 'PRELOAD MODEL (WARMUP)'}
             </button>
 
             <button
@@ -3066,7 +3303,7 @@ const WebcamOcrPanel = ({
               disabled={busy}
               className="webcam-ocr-button webcam-ocr-button--primary"
             >
-              {loading === 'ai-detect' ? 'DETECTING TARGETS...' : '🔍 RUN AI DETECTION'}
+              {loading === 'ai-detect' ? 'DETECTING TARGETS...' : 'RUN AI DETECTION'}
             </button>
 
             {aiTargets.length > 0 && (
@@ -3127,7 +3364,7 @@ const WebcamOcrPanel = ({
               style={{ background: 'linear-gradient(135deg, #8b5cf6, #6366f1)', border: 'none' }}
               title="Detect all buttons, keys, and icons located inside this frame"
             >
-              ⚡ DETECT ELEMENTS IN FRAME
+              DETECT ELEMENTS IN FRAME
             </button> */}
             {/* <button
               type="button"
@@ -3141,7 +3378,7 @@ const WebcamOcrPanel = ({
               style={{ background: 'linear-gradient(135deg, #1877f2, #2563eb)', border: 'none' }}
               title="1-Click Facebook login form detection: Facebook icon, email input, password input, login button"
             >
-              📱 DETECT FACEBOOK LOGIN FORM
+              DETECT FACEBOOK LOGIN FORM
             </button> */}
             <button
               type="button"
@@ -3156,7 +3393,7 @@ const WebcamOcrPanel = ({
           {calibrationPoints.length !== 4 && (
             <div style={{ marginTop: '1rem', padding: '1rem', border: '1px dashed #94a3b8', borderRadius: '0.75rem', textAlign: 'center', background: '#f8fafc' }}>
               <p style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.5rem' }}>
-                Chưa có 4 điểm góc trên video. Nhấn nút bên dưới để tạo 4 mốc kéo thả:
+                Workspace 4-corner frame not found on video. Click button below to create 4 draggable calibration points:
               </p>
               <button
                 type="button"
@@ -3172,7 +3409,7 @@ const WebcamOcrPanel = ({
                   ]);
                 }}
               >
-                📍 TẠO 4 GÓC MẪU
+                GENERATE 4 SAMPLE CORNERS
               </button>
             </div>
           )}
@@ -3238,7 +3475,7 @@ const WebcamOcrPanel = ({
                         onClick={() => handleParkToCorner(idx)}
                         title={`Park CNC directly to Corner ${idx + 1}`}
                       >
-                        📍 PARK HERE
+                        PARK HERE
                       </button>
                     </div>
                   </div>
@@ -3433,7 +3670,7 @@ const WebcamOcrPanel = ({
                   backdropFilter: 'blur(6px)',
                 }}
               >
-                <span>📍 Click anywhere on camera preview to place missing element</span>
+                <span>Click anywhere on camera preview to place missing element</span>
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); setAddCustomTargetMode(false); }}
@@ -3481,11 +3718,11 @@ const WebcamOcrPanel = ({
                 boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
                 transition: 'all 0.2s ease-in-out'
               }}
-              title="Chuyển đổi kiểu hiển thị: Bounding Box / Khung tròn số / Cả hai"
+              title="Toggle display overlay: Bounding Box / Numbered Circle / Both"
               onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.9)'}
               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.75)'}
             >
-              {overlayMode === 'box' ? '📦 Bounding Box' : overlayMode === 'circle' ? '⭕ Khung tròn số' : '🔲 Box + Tròn'}
+              {overlayMode === 'box' ? 'Bounding Box' : overlayMode === 'circle' ? 'Numbered Circle' : 'Box + Circle'}
             </button>
 
             <button
@@ -3515,7 +3752,7 @@ const WebcamOcrPanel = ({
               onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.9)'}
               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.7)'}
             >
-              📸 Capture
+              Capture
             </button>
 
             {/* AI Detection Loading HUD Scanning Overlay */}
@@ -3607,7 +3844,7 @@ const WebcamOcrPanel = ({
                     handleMoveToCncTarget(t);
                   }}
                 >
-                  {t.mappedStepName ? `🎯 ${t.mappedStepName}` : formatLabelToEnglish(t.label)} {Number(t.confidence || 0).toFixed(2)}
+                  {t.mappedStepName ? `[Step] ${t.mappedStepName}` : formatLabelToEnglish(t.label)} {Number(t.confidence || 0).toFixed(2)}
                 </div>
               );
             })}
@@ -3658,7 +3895,7 @@ const WebcamOcrPanel = ({
                   </div>
                   {showCircle && (
                     <div className="vision-ai-tag">
-                      <strong>#{target.id} {target.mappedStepName ? `🎯 ${target.mappedStepName}` : formatLabelToEnglish(target.label)}</strong>
+                      <strong>#{target.id} {target.mappedStepName ? `[Step] ${target.mappedStepName}` : formatLabelToEnglish(target.label)}</strong>
                       <span>X:{target.cnc_x} Y:{target.cnc_y}</span>
                     </div>
                   )}
@@ -3694,7 +3931,7 @@ const WebcamOcrPanel = ({
               >
                 <div className="vision-red-pen-pulse" />
                 <span className="vision-red-pen-badge">
-                  🔴 STYLUS TIP ({redPenPos.tip_x ?? redPenPos.center_x}, {redPenPos.tip_y ?? redPenPos.center_y})
+                  STYLUS TIP ({redPenPos.tip_x ?? redPenPos.center_x}, {redPenPos.tip_y ?? redPenPos.center_y})
                 </span>
               </div>
             )}
@@ -3830,9 +4067,33 @@ const WebcamOcrPanel = ({
                   gap: '4px',
                   boxShadow: '0 2px 6px rgba(2, 132, 199, 0.25)',
                 }}
-                title="Quét lại ngay màn hình hiện tại (Multi-Pass Consensus)"
+                title="Re-scan current screen now (Multi-Pass Consensus)"
               >
-                ⚡ Re-Scan Now
+                Re-Scan Now
+              </button>
+
+              <button
+                type="button"
+                onClick={handleToggleInvertXSign}
+                disabled={busy}
+                className="webcam-ocr-button"
+                style={{
+                  background: originX < 0 ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : '#e2e8f0',
+                  color: originX < 0 ? '#ffffff' : '#334155',
+                  fontWeight: 700,
+                  padding: '0.25rem 0.65rem',
+                  fontSize: '0.72rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  boxShadow: originX < 0 ? '0 2px 6px rgba(245, 158, 11, 0.3)' : 'none',
+                }}
+                title="Đảo ngược dấu trục X (âm/dương) cho toạ độ CNC (Toggle X axis coordinate sign)"
+              >
+                {originX < 0 ? '± X: (-) Âm' : '± X: (+) Dương'}
               </button>
 
               <button
@@ -3854,9 +4115,9 @@ const WebcamOcrPanel = ({
                   gap: '4px',
                   boxShadow: '0 2px 6px rgba(139, 92, 246, 0.25)',
                 }}
-                title="Tự động suy luận ma trận bàn phím và bù các phím số (1-9, 0) còn thiếu"
+                title="Automatically infer keypad matrix and interpolate missing numeric keys (1-9, 0)"
               >
-                ✨ Auto-Fill Keys
+                Auto-Fill Keys
               </button>
 
               <button
@@ -3878,9 +4139,9 @@ const WebcamOcrPanel = ({
                   gap: '4px',
                   boxShadow: '0 2px 6px rgba(16, 185, 129, 0.25)',
                 }}
-                title="Tự động liên kết các mục tiêu đã nhận diện với các bước trong kịch bản"
+                title="Automatically link detected targets to test script steps"
               >
-                🎯 Tự Động Map Kịch Bản
+                Auto Map Script
               </button>
 
               <button
@@ -3902,7 +4163,7 @@ const WebcamOcrPanel = ({
                   gap: '4px',
                   boxShadow: '0 2px 6px rgba(16, 185, 129, 0.25)',
                 }}
-                title="Bật chế độ nhấp chuột vào camera để thêm nút thủ công"
+                title="Enable click on camera to manually add a target"
               >
                 {addCustomTargetMode ? '✕ Cancel' : '+ Add Target'}
               </button>
@@ -3932,8 +4193,8 @@ const WebcamOcrPanel = ({
                     value={target.label || ''}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => handleUpdateTargetLabel(target.id, e.target.value)}
-                    placeholder="Tên nút (vd: Purchase)"
-                    title="Đổi tên nút để phân biệt và liên kết kịch bản"
+                    placeholder="Button name (e.g. Purchase)"
+                    title="Rename target to identify and link to script"
                     style={{
                       flex: 1,
                       minWidth: '80px',
@@ -3961,12 +4222,12 @@ const WebcamOcrPanel = ({
                   </button>
                 </div>
 
-                {/* Dropdown Gán vào bước kịch bản */}
+                {/* Dropdown assign to script step */}
                 <div style={{ marginTop: '6px' }} onClick={(e) => e.stopPropagation()}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#475569' }}>🔗 GÁN VÀO BƯỚC:</span>
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#475569' }}>ASSIGN TO STEP:</span>
                     {target.mappedStepIndex !== undefined && (
-                      <span style={{ fontSize: '0.68rem', color: '#059669', fontWeight: 800 }}>✓ BƯỚC #{target.mappedStepIndex + 1}</span>
+                      <span style={{ fontSize: '0.68rem', color: '#059669', fontWeight: 800 }}>STEP #{target.mappedStepIndex + 1}</span>
                     )}
                   </div>
                   <select
@@ -3985,25 +4246,25 @@ const WebcamOcrPanel = ({
                       cursor: 'pointer',
                     }}
                   >
-                    <option value="">-- Chọn bước kịch bản để gán toạ độ --</option>
+                    <option value="">-- Select script step to assign coordinates --</option>
                     {activeTestScript && Array.isArray(activeTestScript) && activeTestScript.map((s, sIdx) => (
                       <option key={s.id || sIdx} value={sIdx}>
-                        Bước #{sIdx + 1}: {s.screen ? `[${s.screen}] ` : ''}{s.target || s.action}
+                        Step #{sIdx + 1}: {s.screen ? `[${s.screen}] ` : ''}{s.target || s.action}
                       </option>
                     ))}
                   </select>
                 </div>
 
-                {/* Gợi ý nhanh nhãn nút POS */}
+                {/* Quick POS button label suggestions */}
                 <div style={{ marginTop: '6px', display: 'flex', gap: '3px', flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
-                  <span style={{ fontSize: '0.65rem', color: '#64748b', alignSelf: 'center', fontWeight: 600 }}>Gán nhanh:</span>
+                  <span style={{ fontSize: '0.65rem', color: '#64748b', alignSelf: 'center', fontWeight: 600 }}>Quick Assign:</span>
                   {['Purchase', 'Refund', 'Cash', 'Simulated POS', 'Payment', '1', '2', '3', 'Pay', 'Enter'].map((tag) => (
                     <button
                       key={tag}
                       type="button"
                       onClick={() => handleUpdateTargetLabel(target.id, tag)}
                       style={{ fontSize: '0.68rem', padding: '1px 5px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '4px', cursor: 'pointer', color: '#334155', fontWeight: 600 }}
-                      title={`Đặt tên target thành "${tag}"`}
+                      title={`Set target label to "${tag}"`}
                     >
                       +{tag}
                     </button>
